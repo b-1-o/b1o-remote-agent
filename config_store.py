@@ -25,6 +25,7 @@ DEFAULTS: dict[str, Any] = {
     "zoom_url": "",
     "browser": "/usr/bin/brave",
     "browser_profile": "~/.local/share/b1o-remote/browser",
+    "pc_unlock_password": "",
 }
 
 
