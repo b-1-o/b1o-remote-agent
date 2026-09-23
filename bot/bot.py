@@ -1,10 +1,12 @@
 import asyncio
+import html
 import os
 import re
 from urllib.parse import urlparse
 
 import httpx
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -62,9 +64,8 @@ def school_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(f"School Mode: {state}", callback_data="toggle_school")],
         [
             InlineKeyboardButton("▶️ RUN NOW", callback_data="run_school"),
-            InlineKeyboardButton("📋 VIEW", callback_data="view_settings"),
+            InlineKeyboardButton("📋 SETTINGS", callback_data="settings"),
         ],
-        [InlineKeyboardButton("⚙️ EDIT SETTINGS", callback_data="settings")],
         [InlineKeyboardButton("⬅️ BACK", callback_data="back")],
     ])
 
@@ -77,11 +78,47 @@ def settings_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("⏰ School time", callback_data="set:school_time")],
         [InlineKeyboardButton("🎥 Zoom time", callback_data="set:zoom_time")],
         [InlineKeyboardButton("📅 School days", callback_data="set:school_days")],
-        [InlineKeyboardButton("🔗 Zoom URL", callback_data="set:zoom_url")],
-        [InlineKeyboardButton("🌐 Browser", callback_data="set:browser")],
+        [InlineKeyboardButton("🔗 Zoom lesson URL", callback_data="set:zoom_url")],
+        [InlineKeyboardButton("🌐 Brave path", callback_data="set:browser")],
         [InlineKeyboardButton("📁 Browser profile", callback_data="set:browser_profile")],
         [InlineKeyboardButton("⬅️ BACK", callback_data="school")],
     ])
+
+
+def url_line(label: str, value: str) -> str:
+    value = value.strip()
+    if not value:
+        return f"{label}: <i>not set</i>"
+
+    safe = html.escape(value, quote=True)
+    return f'{label}: <a href="{safe}">{html.escape(value)}</a>'
+
+
+def day_names(days: list[int]) -> str:
+    names = {
+        0: "Mon",
+        1: "Tue",
+        2: "Wed",
+        3: "Thu",
+        4: "Fri",
+        5: "Sat",
+        6: "Sun",
+    }
+    return ", ".join(names.get(day, str(day)) for day in days)
+
+
+def school_text() -> str:
+    s = load_settings()
+    status = "🟢 ON" if s["school_enabled"] else "🔴 OFF"
+
+    return (
+        f"🎓 <b>School Mode</b> — {status}\n\n"
+        f"⏰ School: <b>{html.escape(str(s['school_time']))}</b>\n"
+        f"🎥 Zoom: <b>{html.escape(str(s['zoom_time']))}</b>\n"
+        f"📅 Days: <b>{html.escape(day_names(s['school_days']))}</b>\n\n"
+        f"{url_line('🎥 Lesson', str(s.get('zoom_url', '')))}\n"
+        f"{url_line('🌐 Schoology', str(s.get('schoology_url', '')))}"
+    )
 
 
 def settings_text() -> str:
@@ -89,17 +126,17 @@ def settings_text() -> str:
     password_state = "configured" if s["schoology_password"] else "not set"
 
     return (
-        "⚙️ Current settings\n\n"
-        f"School Mode: {'ON' if s['school_enabled'] else 'OFF'}\n"
-        f"School time: {s['school_time']}\n"
-        f"Zoom time: {s['zoom_time']}\n"
-        f"School days: {', '.join(str(day) for day in s['school_days'])}\n"
-        f"Schoology URL: {s['schoology_url']}\n"
-        f"Schoology email: {s['schoology_user'] or 'not set'}\n"
-        f"Schoology password: {password_state}\n"
-        f"Zoom URL: {'configured' if s['zoom_url'] else 'not set'}\n"
-        f"Browser: {s['browser']}\n"
-        f"Profile: {s['browser_profile']}"
+        "⚙️ <b>Current settings</b>\n\n"
+        f"School Mode: <b>{'ON' if s['school_enabled'] else 'OFF'}</b>\n"
+        f"School time: <b>{html.escape(str(s['school_time']))}</b>\n"
+        f"Zoom time: <b>{html.escape(str(s['zoom_time']))}</b>\n"
+        f"School days: <b>{html.escape(day_names(s['school_days']))}</b>\n"
+        f"Schoology email: <code>{html.escape(s['schoology_user'] or 'not set')}</code>\n"
+        f"Schoology password: <b>{password_state}</b>\n\n"
+        f"{url_line('🎥 Zoom lesson', str(s.get('zoom_url', '')))}\n"
+        f"{url_line('🌐 Schoology', str(s.get('schoology_url', '')))}\n\n"
+        f"🌐 Brave: <code>{html.escape(str(s['browser']))}</code>\n"
+        f"📁 Profile: <code>{html.escape(str(s['browser_profile']))}</code>"
     )
 
 
@@ -151,9 +188,7 @@ async def handle_setting_value(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if key in {"school_time", "zoom_time"} and not valid_time(value):
         context.user_data[PENDING_KEY] = key
-        await update.message.reply_text(
-            "Use HH:MM, for example 08:30.",
-        )
+        await update.message.reply_text("Use HH:MM, for example 08:30.")
         return
 
     if key == "schoology_url" and not valid_url(value):
@@ -182,8 +217,6 @@ async def handle_setting_value(update: Update, context: ContextTypes.DEFAULT_TYP
     settings[key] = value
     save_settings(settings)
 
-    # Password messages should not remain in the Telegram chat if deletion
-    # is permitted for this private bot chat.
     if key == "schoology_password":
         try:
             await update.message.delete()
@@ -210,24 +243,21 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data or ""
 
     try:
-        if data == "school":
+        if data in {"school", "view_settings"}:
             await query.edit_message_text(
-                "🎓 School Mode",
+                school_text(),
+                parse_mode=ParseMode.HTML,
                 reply_markup=school_keyboard(),
+                disable_web_page_preview=True,
             )
             return
 
         if data == "settings":
             await query.edit_message_text(
                 settings_text(),
+                parse_mode=ParseMode.HTML,
                 reply_markup=settings_keyboard(),
-            )
-            return
-
-        if data == "view_settings":
-            await query.edit_message_text(
-                settings_text(),
-                reply_markup=school_keyboard(),
+                disable_web_page_preview=True,
             )
             return
 
@@ -236,8 +266,10 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             settings["school_enabled"] = not settings["school_enabled"]
             save_settings(settings)
             await query.edit_message_text(
-                "🎓 School Mode",
+                school_text(),
+                parse_mode=ParseMode.HTML,
                 reply_markup=school_keyboard(),
+                disable_web_page_preview=True,
             )
             return
 
@@ -259,9 +291,10 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "schoology_password": "Send the Schoology password. It will be stored locally and the incoming message will be deleted when possible.",
                 "school_time": "Send the school start time as HH:MM, e.g. 08:20.",
                 "zoom_time": "Send the Zoom time as HH:MM, e.g. 08:30.",
-                "zoom_url": "Send the full Zoom URL.",
+                "school_days": "Send days as numbers 0-6. Example: 0,1,2,3,4 for Monday-Friday.",
+                "zoom_url": "Send the full Zoom lesson URL.",
                 "browser": "Send the Brave executable path, e.g. /usr/bin/brave.",
-                "browser_profile": "Send the Brave automation profile path.",
+                "browser_profile": "Send the Brave browser profile path.",
             }
             prompt = prompts.get(key)
             if not prompt:
@@ -277,10 +310,16 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             settings = load_settings()
             text = (
                 f"🟢 Online\n"
-                f"Host: {result['hostname']}\n"
-                f"School Mode: {'ON' if settings['school_enabled'] else 'OFF'}"
+                f"Host: {html.escape(result['hostname'])}\n"
+                f"School Mode: {'ON' if settings['school_enabled'] else 'OFF'}\n\n"
+                f"{url_line('🎥 Lesson', str(settings.get('zoom_url', '')))}"
             )
-            await query.edit_message_text(text, reply_markup=main_keyboard())
+            await query.edit_message_text(
+                text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=main_keyboard(),
+                disable_web_page_preview=True,
+            )
             return
 
         if data == "lock":
@@ -306,7 +345,10 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        await query.edit_message_text("Unknown action.", reply_markup=main_keyboard())
+        await query.edit_message_text(
+            "Unknown action.",
+            reply_markup=main_keyboard(),
+        )
 
     except Exception as exc:
         await query.edit_message_text(
