@@ -23,8 +23,15 @@ def allowed(update: Update) -> bool:
 
 async def agent(method: str, path: str) -> dict:
     async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.request(method, AGENT_URL + path, headers={"X-Agent-Token": AGENT_TOKEN})
-        r.raise_for_status()
+        r = await client.request(
+            method,
+            AGENT_URL + path,
+            headers={"X-Agent-Token": AGENT_TOKEN},
+        )
+        if not r.is_success:
+            raise RuntimeError(
+                f"Agent HTTP {r.status_code}: {r.text[:240]}"
+            )
         return r.json()
 
 async def delete_message(message) -> None:
