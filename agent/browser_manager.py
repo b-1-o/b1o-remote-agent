@@ -125,11 +125,21 @@ class BrowserManager:
         self._pw = None
         self._browser = None
         self._context = None
+        self._fatal_error: Exception | None = None
 
     def _ensure_started(self) -> None:
         with self._start_lock:
-            if self._started:
+            if self._started and self._thread.is_alive():
                 return
+            if self._started and not self._thread.is_alive():
+                self._started = False
+                self._jobs = queue.Queue()
+                self._thread = threading.Thread(
+                    target=self._worker,
+                    name="b1o-browser-manager",
+                    daemon=True,
+                )
+            self._fatal_error = None
             self._started = True
             self._thread.start()
 
@@ -138,9 +148,14 @@ class BrowserManager:
         event = threading.Event()
         box: dict[str, Any] = {}
         self._jobs.put(_Job(fn=fn, event=event, box=box))
-        event.wait(timeout=45)
+        event.wait(timeout=90)
         if not event.is_set():
-            raise RuntimeError("Browser manager timed out")
+            detail = self._fatal_error
+            if detail:
+                raise RuntimeError(
+                    f"Browser manager stopped: {type(detail).__name__}: {detail}"
+                ) from detail
+            raise RuntimeError("Browser manager timed out after 90 seconds")
         if "error" in box:
             raise box["error"]
         return box.get("result")
@@ -155,7 +170,8 @@ class BrowserManager:
                 # is returned to the individual request instead of killing the
                 # manager thread and producing a generic timeout/500.
                 self._run_queue()
-        except Exception:
+        except Exception as exc:
+            self._fatal_error = exc
             self._pw = None
             self._browser = None
             self._context = None
@@ -389,9 +405,9 @@ class BrowserManager:
                 if not any(phrase in combined for phrase in active_phrases):
                     continue
 
-                # Verify the button is part of the visible pre-join area when
-                # possible. Then click the actual button, not an inner text span.
-                button.click(force=True)
+                # Click the actual button. If Playwright's DOM click does
+                # not trigger Zoom's handler, fall back to a real mouse click.
+                button.click(force=True, timeout=2000)
                 return True
             except Exception:
                 continue
@@ -559,27 +575,83 @@ class BrowserManager:
         meeting_id = meeting.group(1)
         web_url = f"https://app.zoom.us/wc/join/{meeting_id}"
 
+        def finish_prejoin() -> None:
+            def job() -> dict:
+                page = self._tabs.get(slot)
+                if page is None or page.is_closed():
+                    return {"success": False, "action": "zoom_prepare", "reason": "tab_closed"}
+
+                try:
+                    page.bring_to_front()
+                    self._grant_zoom_media_permissions(page)
+                    page.wait_for_timeout(1500)
+
+                    # First try the official invite/browser flow. If it does
+                    # not expose a browser-join link, use the direct Web App
+                    # URL as a fallback.
+                    before = page.url
+                    self._prepare_zoom_join(page)
+
+                    browser_ready = (
+                        "app.zoom.us" in page.url
+                        or "zoom.us/wc/" in page.url
+                    )
+                    if not browser_ready and page.url != web_url:
+                        page.goto(
+                            web_url,
+                            wait_until="domcontentloaded",
+                            timeout=30000,
+                        )
+                        page.wait_for_timeout(2500)
+                        self._grant_zoom_media_permissions(page)
+                        self._prepare_zoom_join(page)
+
+                    page.bring_to_front()
+                    return {
+                        "success": True,
+                        "action": "zoom_prepare",
+                        "slot": slot,
+                        "url_before": before,
+                        "url_after": page.url,
+                        "title": page.title(),
+                    }
+                except Exception as exc:
+                    return {
+                        "success": False,
+                        "action": "zoom_prepare",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+
+            try:
+                self.call(job)
+            except Exception:
+                pass
+
         def job() -> dict:
             page = self._new_page(slot)
-            if page.url != web_url:
+
+            # Open the configured invite URL first. This gives Zoom its normal
+            # join flow and makes the Brave window appear immediately.
+            if page.url != invite_url:
                 page.goto(
-                    web_url,
+                    invite_url,
                     wait_until="domcontentloaded",
                     timeout=30000,
                 )
 
-            page.wait_for_timeout(2200)
-            self._grant_zoom_media_permissions(page)
-            join_state = self._prepare_zoom_join(page)
-            page.wait_for_timeout(1000)
             page.bring_to_front()
+            self._grant_zoom_media_permissions(page)
+
+            timer = threading.Timer(0.8, finish_prejoin)
+            timer.daemon = True
+            timer.start()
 
             return {
                 "success": True,
                 "action": "open_zoom",
                 "slot": slot,
                 "meeting_id": meeting_id,
-                "joined": join_state["joined"],
+                "prejoin_scheduled": True,
                 "url": page.url,
             }
 
