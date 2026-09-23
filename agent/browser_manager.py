@@ -317,106 +317,124 @@ class BrowserManager:
     def _click_zoom_prejoin_option(
         self,
         page,
-        labels: tuple[str, ...],
-        active_words: tuple[str, ...],
+        media: str,
     ) -> bool:
-        # Zoom has used checkboxes, labels, and icon buttons for these
-        # pre-join controls. Prefer exact accessible/text labels first.
-        for label in labels:
-            exact = [
-                page.get_by_role("checkbox", name=re.compile(re.escape(label), re.I)),
-                page.get_by_role("button", name=re.compile(re.escape(label), re.I)),
-                page.get_by_text(re.compile(r"^" + re.escape(label) + r"$", re.I)),
-                page.locator("label").filter(
-                    has_text=re.compile(r"^" + re.escape(label) + r"$", re.I)
-                ),
-            ]
+        # The Zoom Web App pre-join preview uses icon buttons whose visible
+        # text can be only "Video"/"Audio"; the useful state is usually in
+        # aria-label/title. Inspect every visible button instead of relying on
+        # one exact accessible name.
+        media = media.lower()
+        if media == "video":
+            active_phrases = (
+                "stop my video",
+                "stop video",
+                "turn off my video",
+                "turn off video",
+                "video on",
+            )
+            inactive_phrases = (
+                "start my video",
+                "start video",
+                "turn on my video",
+                "turn on video",
+                "video off",
+                "camera off",
+            )
+        else:
+            active_phrases = (
+                "mute my microphone",
+                "mute microphone",
+                "mute my audio",
+                "mute audio",
+                "microphone on",
+                "audio on",
+            )
+            inactive_phrases = (
+                "unmute my microphone",
+                "unmute microphone",
+                "unmute my audio",
+                "unmute audio",
+                "microphone off",
+                "audio off",
+            )
 
-            for locator in exact:
-                try:
-                    count = locator.count()
-                    for index in range(min(count, 8)):
-                        item = locator.nth(index)
-                        if not item.is_visible():
-                            continue
+        buttons = page.locator("button, [role='button']")
+        try:
+            count = buttons.count()
+        except Exception:
+            return False
 
-                        # Checkbox/aria-checked controls: only enable the
-                        # option when it is not already enabled.
-                        if item.get_attribute("role") == "checkbox":
-                            checked = item.get_attribute("aria-checked")
-                            if checked == "true":
-                                return True
-                            if checked == "false":
-                                item.click()
-                                return True
-
-                        checked = item.get_attribute("aria-checked")
-                        if checked == "true":
-                            return True
-                        if checked == "false":
-                            item.click()
-                            return True
-
-                        # Native checkbox.
-                        try:
-                            if item.evaluate(
-                                "(el) => el instanceof HTMLInputElement && el.type === 'checkbox'"
-                            ):
-                                if item.is_checked():
-                                    return True
-                                item.check()
-                                return True
-                        except Exception:
-                            pass
-
-                        item.click()
-                        return True
-                except Exception:
+        for index in range(min(count, 120)):
+            try:
+                button = buttons.nth(index)
+                if not button.is_visible():
                     continue
 
-        # Fallback for icon/button variants: inspect the accessible label,
-        # title, and visible text together. Click only controls that clearly
-        # represent the media being ON (Mute/Stop Video), never Unmute/Start.
-        pattern = "|".join(re.escape(word) for word in active_words)
-        locators = [
-            page.get_by_role("button", name=re.compile(pattern, re.I)),
-            page.locator("[role='button']").filter(
-                has_text=re.compile(pattern, re.I)
-            ),
-            page.locator("button").filter(
-                has_text=re.compile(pattern, re.I)
-            ),
-        ]
+                aria = (button.get_attribute("aria-label") or "").strip().lower()
+                title = (button.get_attribute("title") or "").strip().lower()
+                text = (button.inner_text() or "").strip().lower()
+                data_test = (button.get_attribute("data-testid") or "").strip().lower()
+                combined = " | ".join(
+                    value for value in (aria, title, text, data_test) if value
+                )
 
-        for locator in locators:
-            try:
-                count = locator.count()
-                for index in range(min(count, 16)):
-                    item = locator.nth(index)
-                    if not item.is_visible():
-                        continue
+                if not combined:
+                    continue
 
-                    aria = (item.get_attribute("aria-label") or "").lower()
-                    title = (item.get_attribute("title") or "").lower()
-                    text = (item.inner_text() or "").lower()
-                    combined = f"{aria} {title} {text}"
+                # Never touch a control that already represents the OFF state.
+                if any(phrase in combined for phrase in inactive_phrases):
+                    continue
 
-                    if any(word in combined for word in (
-                        "unmute", "turn on", "start video", "video on",
-                        "microphone on", "audio on",
-                    )):
-                        continue
+                # The button must clearly describe an active media control.
+                if not any(phrase in combined for phrase in active_phrases):
+                    continue
 
-                    if any(
-                        word in combined
-                        for word in active_words
-                    ):
-                        item.click(force=True)
-                        return True
+                # Verify the button is part of the visible pre-join area when
+                # possible. Then click the actual button, not an inner text span.
+                button.click(force=True)
+                return True
             except Exception:
                 continue
 
-        return False
+        # Fallback: inspect labelled elements and click their closest button.
+        try:
+            result = page.evaluate(
+                """({media, active, inactive}) => {
+                    const nodes = Array.from(
+                        document.querySelectorAll(
+                            'button,[role="button"],[aria-label],[title]'
+                        )
+                    );
+                    for (const node of nodes) {
+                        const text = [
+                            node.getAttribute('aria-label') || '',
+                            node.getAttribute('title') || '',
+                            node.textContent || '',
+                            node.getAttribute('data-testid') || ''
+                        ].join(' ').toLowerCase();
+
+                        if (!text.trim()) continue;
+                        if (inactive.some(x => text.includes(x))) continue;
+                        if (!active.some(x => text.includes(x))) continue;
+
+                        const button =
+                            node.closest('button,[role="button"]') || node;
+                        if (button && typeof button.click === 'function') {
+                            button.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }""",
+                {
+                    "media": media,
+                    "active": list(active_phrases),
+                    "inactive": list(inactive_phrases),
+                },
+            )
+            return bool(result)
+        except Exception:
+            return False
 
     def _turn_zoom_toggle_off(
         self,
@@ -424,76 +442,11 @@ class BrowserManager:
         keywords: tuple[str, ...],
         off_phrases: tuple[str, ...],
     ) -> bool:
-        # First handle the explicit Zoom pre-join options.
-        if any(word in " ".join(keywords).lower() for word in ("camera", "video")):
-            if self._click_zoom_prejoin_option(
-                page,
-                (
-                    "Turn off my video",
-                    "Turn Off My Video",
-                    "Stop Video",
-                ),
-                (
-                    "stop video",
-                    "turn off my video",
-                    "video on",
-                ),
-            ):
-                return True
-        else:
-            if self._click_zoom_prejoin_option(
-                page,
-                (
-                    "Don't connect to audio",
-                    "Don't Connect To Audio",
-                    "Mute my microphone",
-                    "Mute Microphone",
-                    "Mute",
-                ),
-                (
-                    "mute",
-                    "mute my microphone",
-                    "microphone on",
-                ),
-            ):
-                return True
-
-        pattern = "|".join(re.escape(word) for word in keywords)
-        locators = [
-            page.get_by_role("button", name=re.compile(pattern, re.I)),
-            page.locator("[role='button']").filter(
-                has_text=re.compile(pattern, re.I)
-            ),
-            page.locator("label").filter(
-                has_text=re.compile(pattern, re.I)
-            ),
-        ]
-
-        for locator in locators:
-            try:
-                count = locator.count()
-                for index in range(min(count, 16)):
-                    item = locator.nth(index)
-                    if not item.is_visible():
-                        continue
-
-                    label = (item.get_attribute("aria-label") or "").lower()
-                    title = (item.get_attribute("title") or "").lower()
-                    text = (item.inner_text() or "").lower()
-                    combined = f"{label} {title} {text}"
-
-                    if any(word in combined for word in (
-                        "unmute", "turn on", "start video", "video off",
-                    )):
-                        continue
-
-                    if any(phrase in combined for phrase in off_phrases):
-                        item.click(force=True)
-                        return True
-            except Exception:
-                continue
-
-        return False
+        joined = " ".join(keywords).lower()
+        media = "video" if any(
+            word in joined for word in ("camera", "video")
+        ) else "audio"
+        return self._click_zoom_prejoin_option(page, media)
 
     def _grant_zoom_media_permissions(self, page) -> None:
         try:
