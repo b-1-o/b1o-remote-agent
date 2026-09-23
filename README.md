@@ -53,3 +53,22 @@ The Telegram bot accepts commands only from the configured chat ID.
 ## Next
 
 Wake-on-LAN needs a controller that remains online while the PC is powered off. The next implementation can add WOL plus an external controller or another always-on device.
+
+
+## School Mode
+
+Weekdays at 08:20, the user service opens the LAUSD Schoology student login page and fills the configured credentials. At 08:28 it opens the configured Zoom Web meeting.
+
+Configure these only in local .env:
+- B1O_SCHOOLOGY_USER
+- B1O_SCHOOLOGY_PASSWORD
+- B1O_ZOOM_URL
+- B1O_BROWSER_EXECUTABLE
+- B1O_BROWSER_PROFILE
+- B1O_ZOOM_TIME
+
+Never commit .env.
+
+The scheduler uses a persistent browser profile so a normal school session can be reused when possible. If the district presents MFA, CAPTCHA, or another interactive security check, the user must complete it manually.
+
+School Mode does not auto-generate or submit schoolwork. Opening assignment links and typing/submitting answers remains a user-controlled action.
