@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Header, HTTPException
-from .actions import get_status, lock_pc, open_zoom, shutdown_pc
+from .actions import get_status, lock_pc, open_zoom, shutdown_pc, unlock_session
 from .config import AGENT_TOKEN
 
 app = FastAPI(title="b1o Remote Agent", version="0.1.0")
@@ -26,6 +26,11 @@ def open_zoom_endpoint(x_agent_token: str | None = Header(default=None)):
 def lock_endpoint(x_agent_token: str | None = Header(default=None)):
     authenticate(x_agent_token)
     return lock_pc()
+
+@app.post("/unlock")
+def unlock_endpoint(x_agent_token: str | None = Header(default=None)):
+    authenticate(x_agent_token)
+    return unlock_session()
 
 @app.post("/shutdown")
 def shutdown_endpoint(x_agent_token: str | None = Header(default=None)):
