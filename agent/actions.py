@@ -55,7 +55,10 @@ def run_command(command: dict) -> dict:
         raise ValueError("Invalid command")
 
     results = []
-    slot = command_id
+    slot = {
+        "open_zoom": "zoom",
+        "open_schoology": "lausd",
+    }.get(command_id, command_id)
 
     for action in actions:
         if not isinstance(action, dict):
