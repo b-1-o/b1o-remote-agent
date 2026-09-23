@@ -154,7 +154,7 @@ def login_schoology(page, settings: dict) -> None:
     page.wait_for_timeout(5000)
 
 
-def open_school_session() -> None:
+def _run_locked_session(worker) -> None:
     global _SCHOOL_SESSION_RUNNING
 
     if _SCHOOL_SESSION_RUNNING:
@@ -171,7 +171,7 @@ def open_school_session() -> None:
 
     _SCHOOL_SESSION_RUNNING = True
     try:
-        _open_school_session()
+        worker()
     finally:
         _SCHOOL_SESSION_RUNNING = False
         try:
@@ -180,64 +180,77 @@ def open_school_session() -> None:
             lock_handle.close()
 
 
-def _close_extra_pages(context, keep_page) -> None:
-    for other in list(context.pages):
-        if other is keep_page:
-            continue
-        try:
-            other.close()
-        except Exception:
-            pass
-
-
-def _find_existing_page(context, url: str):
-    for page in context.pages:
-        if page.url.startswith(url):
-            return page
-    return None
-
-
-def _open_school_session() -> None:
-    settings = load_settings()
-
+def _prepare_school_context(settings: dict):
     executable = browser_path(settings)
     profile_dir = Path(
         str(settings["browser_profile"])
     ).expanduser()
     profile_dir.mkdir(parents=True, exist_ok=True)
 
-    with sync_playwright() as pw:
-        context = pw.chromium.launch_persistent_context(
-            user_data_dir=str(profile_dir),
-            executable_path=executable,
-            headless=False,
-            args=[
-                "--ozone-platform=wayland",
-                "--no-first-run",
-            ],
-        )
+    pw = sync_playwright().start()
+    context = pw.chromium.launch_persistent_context(
+        user_data_dir=str(profile_dir),
+        executable_path=executable,
+        headless=False,
+        args=[
+            "--ozone-platform=wayland",
+            "--no-first-run",
+        ],
+    )
 
-        page = context.pages[0] if context.pages else context.new_page()
-        _close_extra_pages(context, page)
-        login_schoology(page, settings)
+    page = context.pages[0] if context.pages else context.new_page()
+    _close_extra_pages(context, page)
+    return pw, context, page
 
-        zoom_url = str(settings.get("zoom_url", "")).strip()
-        if zoom_url:
-            zoom_hour, zoom_minute = (
-                int(value) for value in settings["zoom_time"].split(":", 1)
-            )
-            wait_until(zoom_hour, zoom_minute)
 
-            zoom_page = _find_existing_page(context, zoom_url)
-            if zoom_page is None:
-                zoom_page = context.new_page()
-                zoom_page.goto(zoom_url, wait_until="domcontentloaded")
-            else:
-                zoom_page.bring_to_front()
+def open_schoology_session() -> None:
+    def worker():
+        settings = load_settings()
+        pw, context, page = _prepare_school_context(settings)
+        try:
+            login_schoology(page, settings)
+            page.bring_to_front()
+            while True:
+                time.sleep(60)
+        finally:
+            try:
+                context.close()
+            finally:
+                pw.stop()
 
-        while True:
-            time.sleep(60)
+    _run_locked_session(worker)
 
+
+def open_school_session() -> None:
+    def worker():
+        settings = load_settings()
+        pw, context, page = _prepare_school_context(settings)
+        try:
+            login_schoology(page, settings)
+
+            zoom_url = str(settings.get("zoom_url", "")).strip()
+            if zoom_url:
+                zoom_hour, zoom_minute = (
+                    int(value) for value in settings["zoom_time"].split(":", 1)
+                )
+                wait_until(zoom_hour, zoom_minute)
+
+                zoom_page = _find_existing_page(context, zoom_url)
+                if zoom_page is None:
+                    zoom_page = context.new_page()
+                    zoom_page.goto(zoom_url, wait_until="domcontentloaded")
+                else:
+                    zoom_page.bring_to_front()
+
+            while True:
+                time.sleep(60)
+        finally:
+            try:
+                context.close()
+            finally:
+                pw.stop()
+
+    _run_locked_session(worker)
 
 def wait_until(hour: int, minute: int) -> None:
     now = datetime.now()
