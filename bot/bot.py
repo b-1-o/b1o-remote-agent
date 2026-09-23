@@ -71,10 +71,12 @@ def school_keyboard() -> InlineKeyboardMarkup:
 
 def settings_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🌐 Schoology URL", callback_data="set:schoology_url")],
         [InlineKeyboardButton("📧 Schoology email", callback_data="set:schoology_user")],
         [InlineKeyboardButton("🔑 Schoology password", callback_data="set:schoology_password")],
         [InlineKeyboardButton("⏰ School time", callback_data="set:school_time")],
         [InlineKeyboardButton("🎥 Zoom time", callback_data="set:zoom_time")],
+        [InlineKeyboardButton("📅 School days", callback_data="set:school_days")],
         [InlineKeyboardButton("🔗 Zoom URL", callback_data="set:zoom_url")],
         [InlineKeyboardButton("🌐 Browser", callback_data="set:browser")],
         [InlineKeyboardButton("📁 Browser profile", callback_data="set:browser_profile")],
@@ -91,6 +93,8 @@ def settings_text() -> str:
         f"School Mode: {'ON' if s['school_enabled'] else 'OFF'}\n"
         f"School time: {s['school_time']}\n"
         f"Zoom time: {s['zoom_time']}\n"
+        f"School days: {', '.join(str(day) for day in s['school_days'])}\n"
+        f"Schoology URL: {s['schoology_url']}\n"
         f"Schoology email: {s['schoology_user'] or 'not set'}\n"
         f"Schoology password: {password_state}\n"
         f"Zoom URL: {'configured' if s['zoom_url'] else 'not set'}\n"
@@ -130,11 +134,31 @@ async def handle_setting_value(update: Update, context: ContextTypes.DEFAULT_TYP
 
     value = update.message.text.strip()
 
+    if key == "school_days":
+        try:
+            days = sorted(set(int(item.strip()) for item in value.split(",")))
+        except ValueError:
+            days = []
+
+        if not days or any(day < 0 or day > 6 for day in days):
+            context.user_data[PENDING_KEY] = key
+            await update.message.reply_text(
+                "Use numbers 0-6 separated by commas. Example: 0,1,2,3,4 for Monday-Friday."
+            )
+            return
+
+        value = days
+
     if key in {"school_time", "zoom_time"} and not valid_time(value):
         context.user_data[PENDING_KEY] = key
         await update.message.reply_text(
             "Use HH:MM, for example 08:30.",
         )
+        return
+
+    if key == "schoology_url" and not valid_url(value):
+        context.user_data[PENDING_KEY] = key
+        await update.message.reply_text("Send a valid http/https Schoology Student Login URL.")
         return
 
     if key == "zoom_url" and not valid_url(value):
@@ -230,6 +254,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data.startswith("set:"):
             key = data.split(":", 1)[1]
             prompts = {
+                "schoology_url": "Send the Schoology Student Login URL.",
                 "schoology_user": "Send the Schoology email/username.",
                 "schoology_password": "Send the Schoology password. It will be stored locally and the incoming message will be deleted when possible.",
                 "school_time": "Send the school start time as HH:MM, e.g. 08:20.",
