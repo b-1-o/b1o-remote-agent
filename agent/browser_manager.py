@@ -176,6 +176,21 @@ class BrowserManager:
         self._browser = browser
         self._context = browser.new_context()
 
+        # Auto-allow media permissions for Zoom so Chromium does not show
+        # camera/microphone permission prompts during the automated join flow.
+        for origin in (
+            "https://app.zoom.us",
+            "https://zoom.us",
+            "https://lausd.zoom.us",
+        ):
+            try:
+                self._context.grant_permissions(
+                    ["camera", "microphone"],
+                    origin=origin,
+                )
+            except Exception:
+                pass
+
     def _context_is_alive(self) -> bool:
         if self._context is None:
             return False
