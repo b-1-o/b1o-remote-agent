@@ -314,12 +314,150 @@ class BrowserManager:
 
         return False
 
+    def _click_zoom_prejoin_option(
+        self,
+        page,
+        labels: tuple[str, ...],
+        active_words: tuple[str, ...],
+    ) -> bool:
+        # Zoom has used checkboxes, labels, and icon buttons for these
+        # pre-join controls. Prefer exact accessible/text labels first.
+        for label in labels:
+            exact = [
+                page.get_by_role("checkbox", name=re.compile(re.escape(label), re.I)),
+                page.get_by_role("button", name=re.compile(re.escape(label), re.I)),
+                page.get_by_text(re.compile(r"^" + re.escape(label) + r"$", re.I)),
+                page.locator("label").filter(
+                    has_text=re.compile(r"^" + re.escape(label) + r"$", re.I)
+                ),
+            ]
+
+            for locator in exact:
+                try:
+                    count = locator.count()
+                    for index in range(min(count, 8)):
+                        item = locator.nth(index)
+                        if not item.is_visible():
+                            continue
+
+                        # Checkbox/aria-checked controls: only enable the
+                        # option when it is not already enabled.
+                        if item.get_attribute("role") == "checkbox":
+                            checked = item.get_attribute("aria-checked")
+                            if checked == "true":
+                                return True
+                            if checked == "false":
+                                item.click()
+                                return True
+
+                        checked = item.get_attribute("aria-checked")
+                        if checked == "true":
+                            return True
+                        if checked == "false":
+                            item.click()
+                            return True
+
+                        # Native checkbox.
+                        try:
+                            if item.evaluate(
+                                "(el) => el instanceof HTMLInputElement && el.type === 'checkbox'"
+                            ):
+                                if item.is_checked():
+                                    return True
+                                item.check()
+                                return True
+                        except Exception:
+                            pass
+
+                        item.click()
+                        return True
+                except Exception:
+                    continue
+
+        # Fallback for icon/button variants: inspect the accessible label,
+        # title, and visible text together. Click only controls that clearly
+        # represent the media being ON (Mute/Stop Video), never Unmute/Start.
+        pattern = "|".join(re.escape(word) for word in active_words)
+        locators = [
+            page.get_by_role("button", name=re.compile(pattern, re.I)),
+            page.locator("[role='button']").filter(
+                has_text=re.compile(pattern, re.I)
+            ),
+            page.locator("button").filter(
+                has_text=re.compile(pattern, re.I)
+            ),
+        ]
+
+        for locator in locators:
+            try:
+                count = locator.count()
+                for index in range(min(count, 16)):
+                    item = locator.nth(index)
+                    if not item.is_visible():
+                        continue
+
+                    aria = (item.get_attribute("aria-label") or "").lower()
+                    title = (item.get_attribute("title") or "").lower()
+                    text = (item.inner_text() or "").lower()
+                    combined = f"{aria} {title} {text}"
+
+                    if any(word in combined for word in (
+                        "unmute", "turn on", "start video", "video on",
+                        "microphone on", "audio on",
+                    )):
+                        continue
+
+                    if any(
+                        word in combined
+                        for word in active_words
+                    ):
+                        item.click(force=True)
+                        return True
+            except Exception:
+                continue
+
+        return False
+
     def _turn_zoom_toggle_off(
         self,
         page,
         keywords: tuple[str, ...],
         off_phrases: tuple[str, ...],
     ) -> bool:
+        # First handle the explicit Zoom pre-join options.
+        if any(word in " ".join(keywords).lower() for word in ("camera", "video")):
+            if self._click_zoom_prejoin_option(
+                page,
+                (
+                    "Turn off my video",
+                    "Turn Off My Video",
+                    "Stop Video",
+                ),
+                (
+                    "stop video",
+                    "turn off my video",
+                    "video on",
+                ),
+            ):
+                return True
+        else:
+            if self._click_zoom_prejoin_option(
+                page,
+                (
+                    "Don't connect to audio",
+                    "Don't Connect To Audio",
+                    "Mute my microphone",
+                    "Mute Microphone",
+                    "Mute",
+                ),
+                (
+                    "mute",
+                    "mute my microphone",
+                    "microphone on",
+                ),
+            ):
+                return True
+
         pattern = "|".join(re.escape(word) for word in keywords)
         locators = [
             page.get_by_role("button", name=re.compile(pattern, re.I)),
@@ -329,14 +467,12 @@ class BrowserManager:
             page.locator("label").filter(
                 has_text=re.compile(pattern, re.I)
             ),
-            page.locator("input[type='checkbox']").locator(".."),
         ]
 
-        # First handle explicit labels/checkboxes used by some Zoom pre-join UIs.
         for locator in locators:
             try:
                 count = locator.count()
-                for index in range(min(count, 12)):
+                for index in range(min(count, 16)):
                     item = locator.nth(index)
                     if not item.is_visible():
                         continue
@@ -346,35 +482,13 @@ class BrowserManager:
                     text = (item.inner_text() or "").lower()
                     combined = f"{label} {title} {text}"
 
-                    # Never click a control that explicitly means the media is
-                    # already disabled.
-                    if any(phrase in combined for phrase in (
-                        "turn on", "unmute", "enable", "start video",
+                    if any(word in combined for word in (
+                        "unmute", "turn on", "start video", "video off",
                     )):
                         continue
 
-                    if not any(phrase in combined for phrase in off_phrases):
-                        continue
-
-                    # Checkbox: click only when currently checked.
-                    checkbox = item.locator("input[type='checkbox']")
-                    if checkbox.count():
-                        box = checkbox.first
-                        if box.is_visible() and box.is_checked():
-                            box.uncheck()
-                            return True
-                        if box.is_visible() and not box.is_checked():
-                            return True
-
-                    pressed = item.get_attribute("aria-pressed")
-                    disabled = item.get_attribute("disabled")
-                    if disabled is not None:
-                        continue
-
-                    if pressed == "true" or any(
-                        phrase in combined for phrase in off_phrases
-                    ):
-                        item.click()
+                    if any(phrase in combined for phrase in off_phrases):
+                        item.click(force=True)
                         return True
             except Exception:
                 continue
@@ -444,16 +558,24 @@ class BrowserManager:
 
         # Keep camera and microphone off before the Join action. Zoom's web
         # UI has used both toggle buttons and checkbox/label controls.
-        self._turn_zoom_toggle_off(
-            page,
-            ("camera", "video", "turn off my video", "stop video"),
-            ("turn off my video", "stop video", "video off"),
-        )
-        self._turn_zoom_toggle_off(
-            page,
-            ("microphone", "mic", "mute", "audio"),
-            ("mute my microphone", "mute microphone", "don't connect to audio", "mute"),
-        )
+        # Zoom's pre-join controls can appear a little after the name
+        # field. Retry for a few seconds so we don't miss them.
+        video_off = False
+        audio_off = False
+        for _ in range(8):
+            video_off = self._turn_zoom_toggle_off(
+                page,
+                ("camera", "video", "turn off my video", "stop video"),
+                ("turn off my video", "stop video", "video off"),
+            ) or video_off
+            audio_off = self._turn_zoom_toggle_off(
+                page,
+                ("microphone", "mic", "mute", "audio"),
+                ("mute my microphone", "mute microphone", "don't connect to audio", "mute"),
+            ) or audio_off
+            if video_off and audio_off:
+                break
+            page.wait_for_timeout(500)
 
         join = self._first_visible([
             page.get_by_role("button", name=re.compile(r"^join$", re.I)),
