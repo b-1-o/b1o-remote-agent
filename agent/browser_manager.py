@@ -566,7 +566,7 @@ class BrowserManager:
         if not invite_url:
             raise RuntimeError("Zoom URL is not configured")
 
-        meeting = re.search(r"/j/(\\d+)", invite_url)
+        meeting = re.search(r"/j/(\d+)", invite_url)
         if not meeting:
             raise RuntimeError(
                 "Zoom URL must contain a meeting ID like /j/1234567890"
