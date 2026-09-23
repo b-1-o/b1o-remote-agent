@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
 import asyncio
@@ -115,7 +115,16 @@ h1{font-size:32px;margin:0 0 5px}.muted{color:#8d98a8}.grid{display:grid;grid-te
 <script src="/app.js?v=3"></script></body></html>'''
 
 @app.get('/', response_class=HTMLResponse)
-def home(): return HTML
+def home():
+    return HTMLResponse(HTML, headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"})
+
+@app.get('/app.js')
+def app_js():
+    return Response(
+        content=__import__("pathlib").Path(__file__).with_name("app.js").read_text(encoding="utf-8"),
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+    )
 
 @app.get('/api/state')
 def state():
