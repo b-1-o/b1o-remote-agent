@@ -253,6 +253,156 @@ class BrowserManager:
 
         return self.call(job)
 
+    def _first_visible(self, locators):
+        for locator in locators:
+            try:
+                count = locator.count()
+                for index in range(min(count, 5)):
+                    item = locator.nth(index)
+                    if item.is_visible():
+                        return item
+            except Exception:
+                continue
+        return None
+
+    def _fill_zoom_name(self, page, name: str = "Erik") -> bool:
+        fields = [
+            page.locator('input[placeholder*="name" i]'),
+            page.locator('input[aria-label*="name" i]'),
+            page.locator('input[name*="name" i]'),
+            page.locator('input[type="text"]'),
+        ]
+
+        field = self._first_visible(fields)
+        if field is None:
+            return False
+
+        try:
+            current = str(field.input_value()).strip()
+        except Exception:
+            current = ""
+
+        if not current:
+            field.fill(name)
+        return True
+
+    def _turn_zoom_toggle_off(self, page, keywords: tuple[str, ...]) -> bool:
+        candidates = [
+            page.get_by_role(
+                "button",
+                name=re.compile(
+                    "|".join(re.escape(word) for word in keywords),
+                    re.I,
+                ),
+            ),
+            page.locator("[role='button']").filter(
+                has_text=re.compile(
+                    "|".join(re.escape(word) for word in keywords),
+                    re.I,
+                )
+            ),
+        ]
+
+        for locator in candidates:
+            try:
+                count = locator.count()
+                for index in range(min(count, 8)):
+                    item = locator.nth(index)
+                    if not item.is_visible():
+                        continue
+
+                    pressed = item.get_attribute("aria-pressed")
+                    disabled = item.get_attribute("disabled")
+                    if disabled is not None:
+                        continue
+
+                    label = (item.get_attribute("aria-label") or "").lower()
+                    text = (item.inner_text() or "").lower()
+                    combined = f"{label} {text}"
+
+                    # Prefer an explicit "turn off/mute" control.
+                    if any(word in combined for word in (
+                        "turn off", "mute", "off",
+                    )):
+                        item.click()
+                        return True
+
+                    # For toggle buttons, pressed=true usually means enabled.
+                    if pressed == "true":
+                        item.click()
+                        return True
+            except Exception:
+                continue
+
+        return False
+
+    def _prepare_zoom_join(self, page) -> dict:
+        # Zoom may first expose the external-app prompt. Cancel it and select
+        # the browser path explicitly.
+        cancel = self._first_visible([
+            page.get_by_role(
+                "button",
+                name=re.compile(r"^cancel$", re.I),
+            ),
+            page.get_by_text(
+                re.compile(r"^cancel$", re.I),
+            ),
+        ])
+        if cancel is not None:
+            try:
+                cancel.click()
+                page.wait_for_timeout(700)
+            except Exception:
+                pass
+
+        browser_join = self._first_visible([
+            page.get_by_text(
+                re.compile(r"join from your browser|join from browser", re.I)
+            ),
+            page.get_by_role(
+                "link",
+                name=re.compile(r"join from your browser|join from browser", re.I),
+            ),
+            page.get_by_role(
+                "button",
+                name=re.compile(r"join from your browser|join from browser", re.I),
+            ),
+        ])
+        if browser_join is not None:
+            try:
+                browser_join.click()
+                page.wait_for_timeout(1800)
+            except Exception:
+                pass
+
+        # Guest/pre-join name. Zoom documents that the browser flow asks for
+        # a display name before joining.
+        self._fill_zoom_name(page, "Erik")
+
+        # Keep camera and microphone off before the Join action.
+        self._turn_zoom_toggle_off(
+            page,
+            ("camera", "video", "turn off my video", "stop video"),
+        )
+        self._turn_zoom_toggle_off(
+            page,
+            ("microphone", "mic", "mute", "mute my microphone"),
+        )
+
+        join = self._first_visible([
+            page.get_by_role("button", name=re.compile(r"^join$", re.I)),
+            page.get_by_role(
+                "button",
+                name=re.compile(r"join (meeting|now)|join", re.I),
+            ),
+        ])
+
+        if join is not None:
+            join.click()
+            return {"joined": True}
+
+        return {"joined": False}
+
     def open_zoom(self, slot: str = "zoom") -> dict:
         settings = load_settings()
         invite_url = str(settings.get("zoom_url", "")).strip()
@@ -261,7 +411,9 @@ class BrowserManager:
 
         meeting = re.search(r"/j/(\d+)", invite_url)
         if not meeting:
-            raise RuntimeError("Zoom URL must contain a meeting ID like /j/1234567890")
+            raise RuntimeError(
+                "Zoom URL must contain a meeting ID like /j/1234567890"
+            )
 
         meeting_id = meeting.group(1)
         web_url = f"https://app.zoom.us/wc/join/{meeting_id}"
@@ -275,45 +427,19 @@ class BrowserManager:
                     timeout=30000,
                 )
 
-            page.wait_for_timeout(1500)
-
-            # Prefer the browser-based join path. No zoommtg/xdg-open launcher.
-            browser_join = page.get_by_text(
-                re.compile(r"join from your browser|join from browser", re.I)
-            )
-            for index in range(min(browser_join.count(), 3)):
-                try:
-                    item = browser_join.nth(index)
-                    if item.is_visible():
-                        item.click()
-                        break
-                except Exception:
-                    continue
-
-            cancel = page.get_by_role(
-                "button",
-                name=re.compile(r"^cancel$", re.I),
-            )
-            for index in range(min(cancel.count(), 2)):
-                try:
-                    item = cancel.nth(index)
-                    if item.is_visible():
-                        item.click()
-                        break
-                except Exception:
-                    continue
-
+            page.wait_for_timeout(1800)
+            join_state = self._prepare_zoom_join(page)
+            page.wait_for_timeout(1000)
             page.bring_to_front()
+
             return {
                 "success": True,
                 "action": "open_zoom",
                 "slot": slot,
                 "meeting_id": meeting_id,
+                "joined": join_state["joined"],
                 "url": page.url,
             }
-
-        return self.call(job)
-
 
     def _open_zoom_chat_panel(self) -> None:
         self._cleanup_tabs()
