@@ -1,3 +1,4 @@
+import fcntl
 import os
 import shutil
 import subprocess
@@ -11,6 +12,7 @@ from playwright.sync_api import sync_playwright
 from config_store import load_settings
 
 _SCHOOL_SESSION_RUNNING = False
+SCHOOL_LOCK_FILE = Path("~/.local/share/b1o-remote/school-session.lock").expanduser()
 
 
 
@@ -158,11 +160,41 @@ def open_school_session() -> None:
     if _SCHOOL_SESSION_RUNNING:
         return
 
+    SCHOOL_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    lock_handle = SCHOOL_LOCK_FILE.open("a+", encoding="utf-8")
+
+    try:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock_handle.close()
+        return
+
     _SCHOOL_SESSION_RUNNING = True
     try:
         _open_school_session()
     finally:
         _SCHOOL_SESSION_RUNNING = False
+        try:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            lock_handle.close()
+
+
+def _close_extra_pages(context, keep_page) -> None:
+    for other in list(context.pages):
+        if other is keep_page:
+            continue
+        try:
+            other.close()
+        except Exception:
+            pass
+
+
+def _find_existing_page(context, url: str):
+    for page in context.pages:
+        if page.url.startswith(url):
+            return page
+    return None
 
 
 def _open_school_session() -> None:
@@ -186,6 +218,7 @@ def _open_school_session() -> None:
         )
 
         page = context.pages[0] if context.pages else context.new_page()
+        _close_extra_pages(context, page)
         login_schoology(page, settings)
 
         zoom_url = str(settings.get("zoom_url", "")).strip()
@@ -195,9 +228,12 @@ def _open_school_session() -> None:
             )
             wait_until(zoom_hour, zoom_minute)
 
-            zoom_page = context.new_page()
-            zoom_page.goto(zoom_url, wait_until="domcontentloaded")
-            zoom_page.bring_to_front()
+            zoom_page = _find_existing_page(context, zoom_url)
+            if zoom_page is None:
+                zoom_page = context.new_page()
+                zoom_page.goto(zoom_url, wait_until="domcontentloaded")
+            else:
+                zoom_page.bring_to_front()
 
         while True:
             time.sleep(60)
