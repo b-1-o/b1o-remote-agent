@@ -13,6 +13,7 @@ from config_store import load_settings
 
 _SCHOOL_SESSION_RUNNING = False
 SCHOOL_LOCK_FILE = Path("~/.local/share/b1o-remote/school-session.lock").expanduser()
+SCHOOL_PROFILE_DIR = Path("~/.local/share/b1o-remote/school-browser").expanduser()
 
 
 
@@ -182,26 +183,31 @@ def _run_locked_session(worker) -> None:
 
 def _prepare_school_context(settings: dict):
     executable = browser_path(settings)
-    profile_dir = Path(
-        str(settings["browser_profile"])
-    ).expanduser()
-    profile_dir.mkdir(parents=True, exist_ok=True)
+    SCHOOL_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
 
     pw = sync_playwright().start()
     context = pw.chromium.launch_persistent_context(
-        user_data_dir=str(profile_dir),
+        user_data_dir=str(SCHOOL_PROFILE_DIR),
         executable_path=executable,
         headless=False,
         args=[
             "--ozone-platform=wayland",
             "--no-first-run",
+            "--disable-session-crashed-bubble",
         ],
     )
 
-    page = context.pages[0] if context.pages else context.new_page()
-    _close_extra_pages(context, page)
-    return pw, context, page
+    if context.pages:
+        page = context.pages[0]
+        for extra in list(context.pages[1:]):
+            try:
+                extra.close()
+            except Exception:
+                pass
+    else:
+        page = context.new_page()
 
+    return pw, context, page
 
 def open_schoology_session() -> None:
     def worker():
@@ -235,7 +241,7 @@ def open_school_session() -> None:
                 )
                 wait_until(zoom_hour, zoom_minute)
 
-                zoom_page = _find_existing_page(context, zoom_url)
+                zoom_page = find_page_with_url(context, zoom_url)
                 if zoom_page is None:
                     zoom_page = context.new_page()
                     zoom_page.goto(zoom_url, wait_until="domcontentloaded")
@@ -251,6 +257,16 @@ def open_school_session() -> None:
                 pw.stop()
 
     _run_locked_session(worker)
+
+
+def find_page_with_url(context, url: str):
+    for page in context.pages:
+        try:
+            if page.url.startswith(url):
+                return page
+        except Exception:
+            pass
+    return None
 
 def wait_until(hour: int, minute: int) -> None:
     now = datetime.now()
