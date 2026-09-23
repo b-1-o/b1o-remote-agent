@@ -3,3 +3,4 @@ uvicorn
 httpx
 python-telegram-bot
 playwright
+python-dotenv
