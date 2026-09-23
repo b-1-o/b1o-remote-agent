@@ -1,8 +1,12 @@
 import subprocess
+import time
 from pathlib import Path
 
 from config_store import load_settings
 from .config import AGENT_TOKEN
+
+_OPEN_GUARD: dict[str, float] = {}
+_OPEN_GUARD_SECONDS = 4.0
 
 
 def _spawn(command: list[str]) -> None:
@@ -38,6 +42,15 @@ def get_status() -> dict:
 def open_url(url: str) -> dict:
     if not (url.startswith("https://") or url.startswith("http://")):
         raise ValueError("Only http/https URLs are allowed")
+
+    # Prevent accidental double/triple launches from repeated Telegram callbacks,
+    # browser retries, or a quick double-click.
+    now = time.monotonic()
+    last = _OPEN_GUARD.get(url, 0.0)
+    if now - last < _OPEN_GUARD_SECONDS:
+        return {"success": True, "action": "open_url", "deduplicated": True}
+
+    _OPEN_GUARD[url] = now
     _spawn(_browser_command(url))
     return {"success": True, "action": "open_url"}
 
