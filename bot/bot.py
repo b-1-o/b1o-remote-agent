@@ -104,7 +104,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await panel(update,context,'🏫 LAUSD login started.',school_keyboard())
             return
         if data=="run_school":
-            import asyncio
             asyncio.create_task(asyncio.to_thread(open_school_session))
             await panel(update,context,'🚀 School Mode started.',school_keyboard()); return
         if data=="actions": await panel(update,context,'<b>🧩 Actions</b>\nButtons installed from the PC admin panel.',actions_keyboard()); return
