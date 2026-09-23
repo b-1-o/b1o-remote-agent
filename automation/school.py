@@ -28,23 +28,35 @@ PROFILE_DIR = Path(
 ZOOM_TIME = os.getenv("B1O_ZOOM_TIME", "08:28")
 
 
-def browser_path() -> str | None:
+def browser_path() -> str:
     if BROWSER_EXECUTABLE:
-        return BROWSER_EXECUTABLE
+        path = Path(BROWSER_EXECUTABLE).expanduser()
+        if path.is_file():
+            return str(path)
+        raise RuntimeError(
+            f"Brave executable was not found at: {path}"
+        )
 
-    for name in (
-        "brave",
-        "brave-browser",
-        "google-chrome",
-        "chromium",
-        "chromium-browser",
-    ):
+    for name in ("brave", "brave-browser"):
         path = shutil.which(name)
         if path:
             return path
 
-    return None
+    common_paths = (
+        "/usr/bin/brave",
+        "/usr/bin/brave-browser",
+        "/opt/brave.com/brave/brave",
+    )
 
+    for candidate in common_paths:
+        path = Path(candidate)
+        if path.is_file():
+            return str(path)
+
+    raise RuntimeError(
+        "Brave Browser was not found. Install Brave or set "
+        "B1O_BROWSER_EXECUTABLE in .env."
+    )
 
 def click_account_email(page) -> bool:
     """Click the account/email choice shown by the LAUSD login page."""
@@ -171,11 +183,9 @@ def main() -> None:
         launch_args = {
             "user_data_dir": str(PROFILE_DIR),
             "headless": False,
+            "executable_path": executable,
             "args": ["--ozone-platform=wayland"],
         }
-
-        if executable:
-            launch_args["executable_path"] = executable
 
         context = pw.chromium.launch_persistent_context(**launch_args)
         page = context.pages[0] if context.pages else context.new_page()
