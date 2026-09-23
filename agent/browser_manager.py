@@ -410,6 +410,9 @@ class BrowserManager:
         }
 
     def close_slot(self, slot: str) -> dict:
+        if not self._started:
+            return {"success": True, "action": "close", "slot": slot, "open": False}
+
         def job() -> dict:
             page = self._tabs.get(slot)
             if page is not None and not page.is_closed():
@@ -420,6 +423,9 @@ class BrowserManager:
         return self.call(job)
 
     def focus_slot(self, slot: str) -> dict:
+        if not self._started:
+            raise RuntimeError(f"Browser tab '{slot}' is not open")
+
         def job() -> dict:
             found = self._focus_slot(slot)
             if not found:
@@ -429,6 +435,9 @@ class BrowserManager:
         return self.call(job)
 
     def tabs(self) -> list[dict[str, Any]]:
+        if not self._started:
+            return []
+
         def job() -> list[dict[str, Any]]:
             self._cleanup_tabs()
             result = []
@@ -488,6 +497,9 @@ class BrowserManager:
         return messages
 
     def zoom_chat(self) -> dict[str, Any]:
+        if not self._started:
+            return {"open": False, "messages": [], "new_messages": []}
+
         def job() -> dict[str, Any]:
             self._cleanup_tabs()
             page = self._tabs.get("zoom")
