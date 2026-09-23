@@ -67,6 +67,28 @@ def _validate_command(item: dict[str, Any]) -> dict[str, Any]:
 
 def load_commands() -> list[dict[str, Any]]:
     COMMANDS_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Seed the two core school controls once. They can still be edited or
+    # removed later from the local Admin panel.
+    if not any(COMMANDS_DIR.glob("*.json")):
+        defaults = [
+            {
+                "id": "open_zoom",
+                "title": "🎥 Zoom",
+                "actions": [{"type": "open_zoom"}],
+            },
+            {
+                "id": "open_schoology",
+                "title": "🏫 LAUSD",
+                "actions": [{"type": "open_schoology"}],
+            },
+        ]
+        for item in defaults:
+            (COMMANDS_DIR / f"{item['id']}.json").write_text(
+                json.dumps(item, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
     result = []
 
     for path in sorted(COMMANDS_DIR.glob("*.json")):
