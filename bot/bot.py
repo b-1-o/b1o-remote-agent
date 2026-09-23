@@ -20,7 +20,7 @@ def allowed(update: Update) -> bool:
     return bool(ALLOWED_CHAT_ID) and update.effective_chat is not None and str(update.effective_chat.id) == ALLOWED_CHAT_ID
 
 async def agent(method: str, path: str) -> dict:
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=90) as client:
         r = await client.request(
             method,
             AGENT_URL + path,
