@@ -1,0 +1,12 @@
+{
+  "school_enabled": true,
+  "school_days": [0, 1, 2, 3, 4],
+  "school_time": "08:20",
+  "zoom_time": "08:30",
+  "schoology_url": "https://lausdschoology.azurewebsites.net/en-US/Student/Login",
+  "schoology_user": "",
+  "schoology_password": "",
+  "zoom_url": "",
+  "browser": "/usr/bin/brave",
+  "browser_profile": "~/.local/share/b1o-remote/browser"
+}
