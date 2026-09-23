@@ -11,7 +11,7 @@ from .actions import (
     shutdown_pc,
 )
 from .config import AGENT_TOKEN
-from .input_actions import type_text, unlock_with_password, send_key
+from .input_actions import type_text, unlock_configured, send_key
 
 app = FastAPI(title="b1o Remote Agent", version="0.2.0")
 
@@ -71,14 +71,10 @@ def input_type(
     return type_text(str(payload.get("text", "")))
 
 
-@app.post("/unlock-password")
-def unlock_password(
-    payload: dict[str, Any],
-    x_agent_token: str | None = Header(default=None),
-):
+@app.post("/unlock")
+def unlock_endpoint(x_agent_token: str | None = Header(default=None)):
     authenticate(x_agent_token)
-    password = str(payload.get("password", ""))
-    return unlock_with_password(password)
+    return unlock_configured()
 
 
 @app.post("/lock")
