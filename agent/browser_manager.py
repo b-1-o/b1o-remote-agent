@@ -180,12 +180,23 @@ class BrowserManager:
             if not page.is_closed():
                 self._tabs.setdefault(f"existing_{index}", page)
 
+    def _context_is_alive(self) -> bool:
+        if self._context is None:
+            return False
+        try:
+            _ = self._context.pages
+            return True
+        except Exception:
+            self._context = None
+            self._tabs.clear()
+            return False
+
     def _run_queue(self) -> None:
         while True:
             job = self._jobs.get()
             try:
                 self._cleanup_tabs()
-                if self._context is None:
+                if not self._context_is_alive():
                     self._start_browser()
                 job.box["result"] = job.fn()
             except Exception as exc:
