@@ -1,0 +1,15 @@
+[Unit]
+Description=b1o Remote Telegram Bot
+After=b1o-remote-agent.service
+Requires=b1o-remote-agent.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Загрузки/b1o-remote-agent
+EnvironmentFile=%h/Загрузки/b1o-remote-agent/.env
+ExecStart=%h/Загрузки/b1o-remote-agent/.venv/bin/python -m bot.bot
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
