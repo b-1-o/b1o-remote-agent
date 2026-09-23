@@ -285,71 +285,114 @@ class BrowserManager:
             page.locator('input[placeholder*="name" i]'),
             page.locator('input[aria-label*="name" i]'),
             page.locator('input[name*="name" i]'),
+            page.locator('input[id*="name" i]'),
             page.locator('input[type="text"]'),
         ]
 
-        field = self._first_visible(fields)
-        if field is None:
-            return False
+        # Zoom can take a few seconds to render the guest pre-join form.
+        # Poll briefly instead of attempting the field only once.
+        for _ in range(12):
+            field = self._first_visible(fields)
+            if field is not None:
+                try:
+                    current = str(field.input_value()).strip()
+                except Exception:
+                    current = ""
 
-        try:
-            current = str(field.input_value()).strip()
-        except Exception:
-            current = ""
+                if not current:
+                    field.fill(name)
 
-        if not current:
-            field.fill(name)
-        return True
+                try:
+                    return str(field.input_value()).strip() == name or bool(current)
+                except Exception:
+                    return True
 
-    def _turn_zoom_toggle_off(self, page, keywords: tuple[str, ...]) -> bool:
-        candidates = [
-            page.get_by_role(
-                "button",
-                name=re.compile(
-                    "|".join(re.escape(word) for word in keywords),
-                    re.I,
-                ),
-            ),
+            try:
+                page.wait_for_timeout(500)
+            except Exception:
+                break
+
+        return False
+
+    def _turn_zoom_toggle_off(
+        self,
+        page,
+        keywords: tuple[str, ...],
+        off_phrases: tuple[str, ...],
+    ) -> bool:
+        pattern = "|".join(re.escape(word) for word in keywords)
+        locators = [
+            page.get_by_role("button", name=re.compile(pattern, re.I)),
             page.locator("[role='button']").filter(
-                has_text=re.compile(
-                    "|".join(re.escape(word) for word in keywords),
-                    re.I,
-                )
+                has_text=re.compile(pattern, re.I)
             ),
+            page.locator("label").filter(
+                has_text=re.compile(pattern, re.I)
+            ),
+            page.locator("input[type='checkbox']").locator(".."),
         ]
 
-        for locator in candidates:
+        # First handle explicit labels/checkboxes used by some Zoom pre-join UIs.
+        for locator in locators:
             try:
                 count = locator.count()
-                for index in range(min(count, 8)):
+                for index in range(min(count, 12)):
                     item = locator.nth(index)
                     if not item.is_visible():
                         continue
+
+                    label = (item.get_attribute("aria-label") or "").lower()
+                    title = (item.get_attribute("title") or "").lower()
+                    text = (item.inner_text() or "").lower()
+                    combined = f"{label} {title} {text}"
+
+                    # Never click a control that explicitly means the media is
+                    # already disabled.
+                    if any(phrase in combined for phrase in (
+                        "turn on", "unmute", "enable", "start video",
+                    )):
+                        continue
+
+                    if not any(phrase in combined for phrase in off_phrases):
+                        continue
+
+                    # Checkbox: click only when currently checked.
+                    checkbox = item.locator("input[type='checkbox']")
+                    if checkbox.count():
+                        box = checkbox.first
+                        if box.is_visible() and box.is_checked():
+                            box.uncheck()
+                            return True
+                        if box.is_visible() and not box.is_checked():
+                            return True
 
                     pressed = item.get_attribute("aria-pressed")
                     disabled = item.get_attribute("disabled")
                     if disabled is not None:
                         continue
 
-                    label = (item.get_attribute("aria-label") or "").lower()
-                    text = (item.inner_text() or "").lower()
-                    combined = f"{label} {text}"
-
-                    # Prefer an explicit "turn off/mute" control.
-                    if any(word in combined for word in (
-                        "turn off", "mute", "off",
-                    )):
-                        item.click()
-                        return True
-
-                    # For toggle buttons, pressed=true usually means enabled.
-                    if pressed == "true":
+                    if pressed == "true" or any(
+                        phrase in combined for phrase in off_phrases
+                    ):
                         item.click()
                         return True
             except Exception:
                 continue
 
         return False
+
+    def _grant_zoom_media_permissions(self, page) -> None:
+        try:
+            from urllib.parse import urlparse
+
+            origin_data = urlparse(page.url)
+            if origin_data.scheme and origin_data.netloc:
+                self._context.grant_permissions(
+                    ["camera", "microphone"],
+                    origin=f"{origin_data.scheme}://{origin_data.netloc}",
+                )
+        except Exception:
+            pass
 
     def _prepare_zoom_join(self, page) -> dict:
         # Zoom may first expose the external-app prompt. Cancel it and select
@@ -386,22 +429,30 @@ class BrowserManager:
         if browser_join is not None:
             try:
                 browser_join.click()
-                page.wait_for_timeout(1800)
             except Exception:
                 pass
+
+        # Zoom can redirect to another web origin after the browser-join click.
+        self._grant_zoom_media_permissions(page)
+
+        # Give the Web App time to render the actual guest pre-join screen.
+        page.wait_for_timeout(2500)
 
         # Guest/pre-join name. Zoom documents that the browser flow asks for
         # a display name before joining.
         self._fill_zoom_name(page, "Erik")
 
-        # Keep camera and microphone off before the Join action.
+        # Keep camera and microphone off before the Join action. Zoom's web
+        # UI has used both toggle buttons and checkbox/label controls.
         self._turn_zoom_toggle_off(
             page,
             ("camera", "video", "turn off my video", "stop video"),
+            ("turn off my video", "stop video", "video off"),
         )
         self._turn_zoom_toggle_off(
             page,
-            ("microphone", "mic", "mute", "mute my microphone"),
+            ("microphone", "mic", "mute", "audio"),
+            ("mute my microphone", "mute microphone", "don't connect to audio", "mute"),
         )
 
         join = self._first_visible([
@@ -442,7 +493,8 @@ class BrowserManager:
                     timeout=30000,
                 )
 
-            page.wait_for_timeout(1800)
+            page.wait_for_timeout(2200)
+            self._grant_zoom_media_permissions(page)
             join_state = self._prepare_zoom_join(page)
             page.wait_for_timeout(1000)
             page.bring_to_front()
