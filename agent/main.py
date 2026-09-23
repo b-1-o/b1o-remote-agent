@@ -11,6 +11,7 @@ from .actions import (
     login_schoology,
     open_url,
     open_zoom,
+    join_zoom,
     run_command,
     start_school_mode,
 )
@@ -68,6 +69,18 @@ def open_zoom_endpoint(x_agent_token: str | None = Header(default=None)):
         return open_zoom("zoom")
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Zoom: {type(exc).__name__}: {exc}") from exc
+
+
+@app.post("/join-zoom")
+def join_zoom_endpoint(x_agent_token: str | None = Header(default=None)):
+    authenticate(x_agent_token)
+    try:
+        return join_zoom("zoom")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Zoom join: {type(exc).__name__}: {exc}",
+        ) from exc
 
 
 @app.post("/open-schoology")

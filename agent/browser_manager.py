@@ -647,19 +647,11 @@ class BrowserManager:
                 f"controls={controls}"
             )
 
-        join = self._first_visible([
-            page.get_by_role("button", name=re.compile(r"^join$", re.I)),
-            page.get_by_role(
-                "button",
-                name=re.compile(r"join (meeting|now)|join", re.I),
-            ),
-        ])
-
-        if join is not None:
-            join.click()
-            return {"joined": True}
-
-        return {"joined": False}
+        return {
+            "ready": bool(video_off and audio_off),
+            "video_off": bool(video_off),
+            "audio_off": bool(audio_off),
+        }
 
     def open_zoom(self, slot: str = "zoom") -> dict:
         settings = load_settings()
@@ -702,13 +694,61 @@ class BrowserManager:
             page.wait_for_timeout(500)
             page.bring_to_front()
 
+            if not join_state["ready"]:
+                raise RuntimeError(
+                    "Zoom pre-join is not ready: "
+                    f"video_off={join_state['video_off']}, "
+                    f"audio_off={join_state['audio_off']}"
+                )
+
             return {
                 "success": True,
                 "action": "open_zoom",
                 "slot": slot,
                 "meeting_id": meeting_id,
-                "joined": join_state["joined"],
+                "ready_to_join": True,
+                "video_off": True,
+                "audio_off": True,
                 "url": page.url,
+            }
+
+        return self.call(job)
+
+    def join_zoom(self, slot: str = "zoom") -> dict:
+        def job() -> dict:
+            page = self._tabs.get(slot)
+            if page is None or page.is_closed():
+                raise RuntimeError("Zoom pre-join tab is not open")
+
+            join = self._first_visible([
+                page.get_by_role(
+                    "button",
+                    name=re.compile(
+                        r"^(join|войти|присоединиться)$",
+                        re.I,
+                    ),
+                ),
+                page.get_by_text(
+                    re.compile(
+                        r"^(join|войти|присоединиться)$",
+                        re.I,
+                    ),
+                ),
+            ])
+
+            if join is None:
+                raise RuntimeError("Zoom Join/Войти button was not found")
+
+            page.bring_to_front()
+            join.click(force=True, timeout=5000)
+            page.wait_for_timeout(1200)
+
+            return {
+                "success": True,
+                "action": "join_zoom",
+                "slot": slot,
+                "url": page.url,
+                "joined": True,
             }
 
         return self.call(job)

@@ -17,6 +17,10 @@ ALLOWED_CHAT_ID = os.getenv("B1O_TELEGRAM_CHAT_ID", "")
 PANEL_KEY = "panel_id"
 PANEL_HISTORY_KEY = "panel_history"
 MAX_PANEL_HISTORY = 8
+ZOOM_READY_IMAGE_URL = (
+    "https://raw.githubusercontent.com/b-1-o/b1o-remote-agent/"
+    "main/bot/assets/zoom_ready.jpg"
+)
 
 def allowed(update: Update) -> bool:
     return bool(ALLOWED_CHAT_ID) and update.effective_chat is not None and str(update.effective_chat.id) == ALLOWED_CHAT_ID
@@ -142,6 +146,31 @@ async def background_schoology(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
 
+async def zoom_ready_panel(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    chat_id = update.effective_chat.id
+    await _delete_old_panels(context, chat_id)
+
+    message = await context.bot.send_photo(
+        chat_id=chat_id,
+        photo=ZOOM_READY_IMAGE_URL,
+        caption=(
+            "<b>Zoom ready to join</b>\n"
+            "Name: <b>Erik</b>\n"
+            "🎙️ Microphone: <b>OFF</b>\n"
+            "📷 Camera: <b>OFF</b>"
+        ),
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("Join", callback_data="zoom_join")]
+        ]),
+    )
+    context.chat_data[PANEL_KEY] = message.message_id
+    context.chat_data[PANEL_HISTORY_KEY] = [message.message_id]
+
+
 async def background_school(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         await agent('POST','/school/start')
@@ -166,7 +195,37 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             from config_store import save_settings
             s=load_settings(); s['school_enabled']=not s['school_enabled']; save_settings(s)
             await panel(update,context,"<b>🎓 School Mode</b>",school_keyboard()); return
-        if data=="zoom": await agent('POST','/open-zoom'); await panel(update,context,'🎥 Zoom opened.',school_keyboard()); return
+        if data=="zoom":
+            result = await agent('POST', '/open-zoom')
+            if not result.get("ready_to_join"):
+                raise RuntimeError("Zoom did not reach the ready-to-join state")
+            await zoom_ready_panel(update, context)
+            return
+
+        if data=="zoom_join":
+            try:
+                await q.message.edit_caption(
+                    caption="<b>Joining Zoom…</b>",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=None,
+                )
+            except Exception:
+                pass
+
+            await agent('POST', '/join-zoom')
+
+            try:
+                await q.message.delete()
+            except Exception:
+                pass
+
+            await panel(
+                update,
+                context,
+                "✅ <b>Joined Zoom</b>",
+                school_keyboard(),
+            )
+            return
         if data=="lausd":
             asyncio.create_task(background_schoology(update, context))
             await panel(update,context,'🏫 LAUSD login started.',school_keyboard())
