@@ -48,7 +48,12 @@ def school_keyboard() -> InlineKeyboardMarkup:
 
 def actions_keyboard() -> InlineKeyboardMarkup:
     rows=[]
-    for cmd in load_commands()[:30]:
+    # Zoom and LAUSD are fixed School Mode controls, not custom Actions.
+    custom_commands = [
+        cmd for cmd in load_commands()
+        if cmd["id"] not in {"open_zoom", "open_schoology"}
+    ]
+    for cmd in custom_commands[:30]:
         rows.append([InlineKeyboardButton(cmd['title'][:48], callback_data=f"cmd:{cmd['id']}")])
     if not rows: rows=[[InlineKeyboardButton("No custom buttons yet", callback_data="noop")]]
     rows.append([InlineKeyboardButton("⬅️ Home", callback_data="home")])
