@@ -1,34 +1,6 @@
 import subprocess
-import time
-from pathlib import Path
 
-from config_store import load_settings
-from .config import AGENT_TOKEN
-
-_OPEN_GUARD: dict[str, float] = {}
-_OPEN_GUARD_SECONDS = 4.0
-
-
-def _spawn(command: list[str]) -> None:
-    subprocess.Popen(
-        command,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-
-
-def _browser_command(url: str) -> list[str]:
-    settings = load_settings()
-    browser = str(settings.get("browser", "/usr/bin/brave")).strip()
-
-    # Regular remote buttons use the user's normal Brave profile.
-    # School automation has its own dedicated Playwright profile.
-    return [
-        browser,
-        "--new-tab",
-        url,
-    ]
+from .browser_manager import browser_manager
 
 
 def get_status() -> dict:
@@ -36,45 +8,112 @@ def get_status() -> dict:
     return {"online": True, "hostname": hostname}
 
 
-def open_url(url: str) -> dict:
+def open_url(url: str, slot: str = "url") -> dict:
     if not (url.startswith("https://") or url.startswith("http://")):
         raise ValueError("Only http/https URLs are allowed")
-
-    # Prevent accidental double/triple launches from repeated Telegram callbacks,
-    # browser retries, or a quick double-click.
-    now = time.monotonic()
-    last = _OPEN_GUARD.get(url, 0.0)
-    if now - last < _OPEN_GUARD_SECONDS:
-        return {"success": True, "action": "open_url", "deduplicated": True}
-
-    _OPEN_GUARD[url] = now
-    _spawn(_browser_command(url))
-    return {"success": True, "action": "open_url"}
+    return browser_manager().open_url(slot, url)
 
 
-def open_zoom() -> dict:
-    settings = load_settings()
-    url = str(settings.get("zoom_url", "")).strip()
-    if not url:
-        raise RuntimeError("Zoom URL is not configured")
-    return open_url(url)
+def open_zoom(slot: str = "zoom") -> dict:
+    return browser_manager().open_zoom(slot)
 
 
-def open_schoology() -> dict:
-    settings = load_settings()
-    url = str(settings.get("schoology_url", "")).strip()
-    if not url:
-        raise RuntimeError("Schoology URL is not configured")
-    return open_url(url)
+def open_schoology(slot: str = "lausd") -> dict:
+    return browser_manager().open_schoology(slot)
+
+
+def login_schoology(slot: str = "lausd") -> dict:
+    return browser_manager().login_schoology(slot)
+
+
+def start_school_mode() -> dict:
+    return browser_manager().start_school_mode()
+
+
+def browser_tabs() -> list[dict]:
+    return browser_manager().tabs()
+
+
+def browser_focus(slot: str) -> dict:
+    return browser_manager().focus_slot(slot)
+
+
+def browser_close(slot: str) -> dict:
+    return browser_manager().close_slot(slot)
+
+
+def browser_zoom_chat() -> dict:
+    return browser_manager().zoom_chat()
+
+
+def run_command(command: dict) -> dict:
+    command_id = str(command.get("id", "")).strip()
+    title = str(command.get("title", "")).strip()
+    actions = command.get("actions")
+
+    if not command_id or not title or not isinstance(actions, list) or not actions:
+        raise ValueError("Invalid command")
+
+    results = []
+    slot = command_id
+
+    for action in actions:
+        if not isinstance(action, dict):
+            raise ValueError("Invalid action")
+        action_type = action.get("type")
+
+        if action_type == "open_url":
+            url = str(action.get("url", "")).strip()
+            if not (url.startswith("https://") or url.startswith("http://")):
+                raise ValueError("open_url requires http/https URL")
+            results.append(open_url(url, slot))
+
+        elif action_type == "open_zoom":
+            results.append(open_zoom(slot))
+
+        elif action_type == "open_schoology":
+            results.append(login_schoology(slot))
+
+        elif action_type == "key":
+            combo = action.get("combo")
+            if not isinstance(combo, list) or not combo:
+                raise ValueError("key requires combo")
+            results.append(browser_manager().send_key(slot, combo))
+
+        elif action_type == "type":
+            results.append(
+                browser_manager().type_text(slot, str(action.get("text", "")))
+            )
+
+        else:
+            raise ValueError(f"Unsupported action: {action_type}")
+
+    return {
+        "success": True,
+        "action": "command",
+        "command_id": command_id,
+        "title": title,
+        "results": results,
+    }
 
 
 def lock_pc() -> dict:
-    _spawn(["loginctl", "lock-session"])
+    subprocess.Popen(
+        ["loginctl", "lock-session"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
     return {"success": True, "action": "lock"}
 
 
 def shutdown_pc() -> dict:
-    _spawn(["systemctl", "poweroff"])
+    subprocess.Popen(
+        ["systemctl", "poweroff"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
     return {"success": True, "action": "shutdown"}
 
 
