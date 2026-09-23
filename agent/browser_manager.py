@@ -343,37 +343,28 @@ class BrowserManager:
             raise ValueError("Empty key combo")
 
         def job() -> dict:
+            from .input_actions import send_key
+
             page = self._new_page(slot)
             page.bring_to_front()
-            parts = [str(item).strip().upper() for item in combo]
-            key = "+".join({
-                "CTRL": "Control",
-                "ALT": "Alt",
-                "SHIFT": "Shift",
-                "SUPER": "Meta",
-                "ENTER": "Enter",
-                "ESC": "Escape",
-                "TAB": "Tab",
-                "SPACE": "Space",
-                "BACKSPACE": "Backspace",
-                "LEFT": "ArrowLeft",
-                "RIGHT": "ArrowRight",
-                "UP": "ArrowUp",
-                "DOWN": "ArrowDown",
-            }.get(part, part.title()) for part in parts)
-            page.keyboard.press(key)
-            return {"success": True, "action": "key", "slot": slot, "combo": parts}
+            result = send_key(combo)
+            result["slot"] = slot
+            return result
 
         return self.call(job)
 
     def type_text(self, slot: str, value: str) -> dict:
         def job() -> dict:
+            from .input_actions import type_text
+
             page = self._new_page(slot)
             page.bring_to_front()
-            page.keyboard.type(value)
-            return {"success": True, "action": "type", "slot": slot, "length": len(value)}
+            result = type_text(value)
+            result["slot"] = slot
+            return result
 
         return self.call(job)
+
 
     def start_school_mode(self) -> dict:
         result = self.login_schoology("lausd")
