@@ -78,3 +78,12 @@ def unlock_with_password(password: str) -> dict:
     send_key(["ENTER"])
     result.update({"action": "unlock", "password_used": True})
     return result
+
+
+def unlock_configured() -> dict:
+    from config_store import load_settings
+
+    password = str(load_settings().get("pc_unlock_password", ""))
+    if not password:
+        raise RuntimeError("PC unlock password is not configured in Admin.")
+    return unlock_with_password(password)
