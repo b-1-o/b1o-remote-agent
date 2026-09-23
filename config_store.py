@@ -20,9 +20,9 @@ DEFAULTS: dict[str, Any] = {
     "school_time": "08:20",
     "zoom_time": "08:30",
     "schoology_url": "https://lausdschoology.azurewebsites.net/en-US/Student/Login",
-    "schoology_user": "",
+    "schoology_user": "eghabuzy0001@mymail.lausd.net",
     "schoology_password": "",
-    "zoom_url": "",
+    "zoom_url": "https://lausd.zoom.us/j/4483525320",
     "browser": "/usr/bin/brave",
     "browser_profile": "~/.local/share/b1o-remote/browser",
     "pc_unlock_password": "",
@@ -56,6 +56,23 @@ def _ensure_file() -> None:
 
     if not SETTINGS_FILE.exists():
         save_settings(_initial_settings())
+        return
+
+    try:
+        current = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        current = {}
+
+    defaults = _initial_settings()
+    changed = False
+
+    for key, value in defaults.items():
+        if key not in current or current[key] in ("", None):
+            current[key] = value
+            changed = True
+
+    if changed:
+        save_settings(current)
 
 
 def load_settings() -> dict[str, Any]:
