@@ -4,16 +4,35 @@ from pydantic import BaseModel
 
 import asyncio
 import json
+import os
 from pathlib import Path
+
+import httpx
 
 from commands_store import COMMANDS_DIR, install_pack, load_commands
 from config_store import load_settings, save_settings
-from runner import execute_command_sync
 from schedule_store import delete_schedule, load_schedules, upsert_schedule
 from agent.actions import get_status, lock_pc, shutdown_pc
 from agent.input_actions import unlock_configured
 
 app = FastAPI(title="b1o Remote Admin")
+
+AGENT_URL = os.getenv("B1O_AGENT_URL", "http://127.0.0.1:8765")
+AGENT_TOKEN = os.getenv("B1O_REMOTE_TOKEN", "")
+
+
+def agent_call(method: str, path: str, payload: dict | None = None) -> dict:
+    response = httpx.request(
+        method,
+        AGENT_URL + path,
+        headers={"X-Agent-Token": AGENT_TOKEN},
+        json=payload,
+        timeout=60,
+    )
+    if not response.is_success:
+        raise HTTPException(response.status_code, response.text[:400])
+    return response.json()
+
 
 class SettingsPayload(BaseModel):
     school_enabled: bool
@@ -65,6 +84,7 @@ h1{font-size:32px;margin:0 0 5px}.muted{color:#8d98a8}.grid{display:grid;grid-te
 <button class="btn active" data-page="overview">Overview</button>
 <button class="btn" data-page="school">School</button>
 <button class="btn" data-page="browser">Browser</button>
+<button class="btn" data-page="chat">Chat</button>
 <button class="btn" data-page="commands">Buttons</button>
 <button class="btn" data-page="schedules">Schedules</button>
 <button class="btn" data-page="system">System</button>
@@ -93,7 +113,29 @@ h1{font-size:32px;margin:0 0 5px}.muted{color:#8d98a8}.grid{display:grid;grid-te
 <div class="card"><h2>🔓 PC Unlock</h2><div class="muted">Password is stored locally on this PC and never displayed in Telegram.</div><div class="field"><div class="label">PC password</div><input id="pc_unlock_password" type="password" placeholder="Leave blank to keep current"></div><div class="row spaced"><button class="btn primary" onclick="saveSettings()">Save unlock password</button></div></div>
 </section>
 <section id="browser" class="page">
-<div class="card"><h2>🌐 Brave</h2><div class="grid"><div class="field"><div class="label">Executable</div><input id="browser"></div><div class="field"><div class="label">Automation profile</div><input id="browser_profile"></div></div><div class="row spaced"><button class="btn primary" onclick="saveSettings()">Save browser</button></div></div>
+<div class="card">
+<h2>🌐 Active Browser Tabs</h2>
+<div class="muted">Each command uses one managed Brave tab. Green dot means the tab is open.</div>
+<div id="browserTabs" class="list"></div>
+<div class="row spaced"><button class="btn" onclick="refreshBrowserTabs()">Refresh</button></div>
+</div>
+<div class="card">
+<h2>⚙️ Brave</h2>
+<div class="grid">
+<div class="field"><div class="label">Executable</div><input id="browser"></div>
+<div class="field"><div class="label">Automation profile</div><input id="browser_profile"></div>
+</div>
+<div class="row spaced"><button class="btn primary" onclick="saveSettings()">Save browser</button></div>
+</div>
+</section>
+<section id="chat" class="page">
+<div class="card">
+<h2>💬 Zoom Chat</h2>
+<div class="muted">New messages detected from the open Zoom web page appear here.</div>
+<div id="zoomChatState" class="pill">No Zoom tab</div>
+<div id="zoomChatMessages" class="list"></div>
+<div class="row spaced"><button class="btn" onclick="refreshZoomChat()">Refresh</button></div>
+</div>
 </section>
 <section id="commands" class="page">
 <div class="card"><h2>🧩 Telegram Buttons</h2><div class="muted">Create the buttons that should be available in Telegram. No shell commands are allowed.</div>
@@ -136,7 +178,11 @@ def state():
     safe = dict(settings)
     safe['schoology_password'] = bool(settings.get('schoology_password'))
     safe['pc_unlock_password'] = bool(settings.get('pc_unlock_password'))
-    return {'settings': safe, 'commands': load_commands(), 'schedules': load_schedules()}
+    try:
+        browser_tabs = agent_call("GET", "/browser/tabs").get("tabs", [])
+    except Exception:
+        browser_tabs = []
+    return {'settings': safe, 'commands': load_commands(), 'schedules': load_schedules(), 'browser_tabs': browser_tabs}
 
 @app.post('/api/settings')
 def update_settings(payload: SettingsPayload):
@@ -164,13 +210,34 @@ def delete_command(command_id: str):
 def run_command(command_id: str):
     command = next((x for x in load_commands() if x['id']==command_id), None)
     if not command: raise HTTPException(404, 'Command not found')
-    execute_command_sync(command); return {'ok': True}
+    agent_call("POST", "/run-command", command)
+    return {'ok': True}
 
 @app.post('/api/schedules')
 def add_schedule(payload: SchedulePayload):
     try: item = upsert_schedule(payload.model_dump())
     except Exception as exc: raise HTTPException(400, str(exc)) from exc
     return item
+
+@app.get('/api/browser/tabs')
+def browser_tabs_api():
+    return agent_call("GET", "/browser/tabs")
+
+
+@app.post('/api/browser/focus/{slot}')
+def browser_focus_api(slot: str):
+    return agent_call("POST", f"/browser/focus/{slot}")
+
+
+@app.post('/api/browser/close/{slot}')
+def browser_close_api(slot: str):
+    return agent_call("POST", f"/browser/close/{slot}")
+
+
+@app.get('/api/browser/chat')
+def browser_chat_api():
+    return agent_call("GET", "/browser/chat")
+
 
 @app.post('/api/action/{action}')
 def action(action: str):
