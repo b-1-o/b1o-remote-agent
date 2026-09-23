@@ -52,10 +52,21 @@ def send_key(combo: Iterable[str]) -> dict:
     if not names or any(name not in KEY_CODES for name in names):
         raise ValueError("Unsupported key in combo")
 
+    modifiers = {"CTRL", "ALT", "SHIFT", "SUPER"}
+    held = [name for name in names if name in modifiers]
+    normal = [name for name in names if name not in modifiers]
+
     events: list[str] = []
-    for name in names:
+
+    for name in held:
+        events.append(f"{KEY_CODES[name]}:1")
+
+    for name in normal:
         code = KEY_CODES[name]
         events.extend([f"{code}:1", f"{code}:0"])
+
+    for name in reversed(held):
+        events.append(f"{KEY_CODES[name]}:0")
 
     _run([tool, "key", *events])
     return {"success": True, "action": "key", "combo": names}
