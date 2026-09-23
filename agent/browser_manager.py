@@ -259,14 +259,117 @@ class BrowserManager:
 
     def open_zoom(self, slot: str = "zoom") -> dict:
         settings = load_settings()
-        url = str(settings.get("zoom_url", "")).strip()
-        if not url:
+        invite_url = str(settings.get("zoom_url", "")).strip()
+        if not invite_url:
             raise RuntimeError("Zoom URL is not configured")
-        result = self.open_url(slot, url)
+
+        meeting = re.search(r"/j/(\d+)", invite_url)
+        if not meeting:
+            raise RuntimeError(
+                "Zoom URL must contain a meeting ID like /j/1234567890"
+            )
+
+        meeting_id = meeting.group(1)
+
+        def job() -> dict:
+            page = self._new_page(slot)
+
+            # Use Zoom's Web App instead of the invite launcher. This avoids
+            # the external xdg-open / zoommtg application dialog.
+            page.goto(
+                "https://app.zoom.us/wc",
+                wait_until="domcontentloaded",
+                timeout=30000,
+            )
+            page.wait_for_timeout(1500)
+
+            # If the Web App opens directly to a meeting-id form, use it.
+            meeting_input = page.locator(
+                'input[placeholder*="Meeting ID" i], '
+                'input[aria-label*="Meeting ID" i], '
+                'input[name*="meeting" i]'
+            )
+
+            if meeting_input.count() and meeting_input.first.is_visible():
+                meeting_input.first.fill(meeting_id)
+                join = page.get_by_role(
+                    "button",
+                    name=re.compile(r"^join$", re.I),
+                )
+                if join.count():
+                    join.first.click()
+                else:
+                    meeting_input.first.press("Enter")
+            else:
+                # Some Web App versions first show a "Join Meeting" landing
+                # button before the meeting ID field appears.
+                join_meeting = page.get_by_text(
+                    re.compile(r"^join meeting$", re.I)
+                )
+                if join_meeting.count():
+                    join_meeting.first.click()
+                    page.wait_for_timeout(800)
+
+                meeting_input = page.locator(
+                    'input[placeholder*="Meeting ID" i], '
+                    'input[aria-label*="Meeting ID" i], '
+                    'input[name*="meeting" i]'
+                )
+                if not meeting_input.count():
+                    raise RuntimeError(
+                        "Zoom Web App did not show the Meeting ID field."
+                    )
+
+                meeting_input.first.fill(meeting_id)
+                join = page.get_by_role(
+                    "button",
+                    name=re.compile(r"^join$", re.I),
+                )
+                if join.count():
+                    join.first.click()
+                else:
+                    meeting_input.first.press("Enter")
+
+            page.wait_for_timeout(1500)
+
+            # Handle the web launcher page if Zoom still presents it.
+            browser_join = page.get_by_text(
+                re.compile(r"join from your browser", re.I)
+            )
+            if browser_join.count():
+                try:
+                    browser_join.first.click()
+                except Exception:
+                    pass
+
+            # Cancel any in-page application-launch dialog if one is rendered.
+            cancel = page.get_by_role(
+                "button",
+                name=re.compile(r"^cancel$", re.I),
+            )
+            if cancel.count():
+                try:
+                    cancel.first.click()
+                except Exception:
+                    pass
+
+            page.bring_to_front()
+
+            return {
+                "success": True,
+                "action": "open_zoom",
+                "slot": slot,
+                "meeting_id": meeting_id,
+                "url": page.url,
+            }
+
+        result = self.call(job)
+
         try:
             self.call(lambda: self._open_zoom_chat_panel())
         except Exception:
             pass
+
         return result
 
     def _open_zoom_chat_panel(self) -> None:
