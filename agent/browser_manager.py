@@ -151,7 +151,9 @@ class BrowserManager:
         try:
             with sync_playwright() as pw:
                 self._pw = pw
-                self._start_browser()
+                # Browser startup happens inside _run_queue so a launch error
+                # is returned to the individual request instead of killing the
+                # manager thread and producing a generic timeout/500.
                 self._run_queue()
         except Exception:
             self._pw = None
