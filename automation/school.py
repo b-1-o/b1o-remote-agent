@@ -10,7 +10,6 @@ from playwright.sync_api import sync_playwright
 
 from config_store import load_settings
 
-STUDENT_LOGIN_URL = "https://lausdschoology.azurewebsites.net/en-US/Student/Login"
 
 
 def browser_path(settings: dict) -> str:
@@ -139,7 +138,7 @@ def login_schoology(page, settings: dict) -> None:
             "Schoology email/password are not configured. Open Telegram → Settings."
         )
 
-    page.goto(STUDENT_LOGIN_URL, wait_until="domcontentloaded")
+    login_url = str(settings.get("schoology_url", "")).strip()\n    if not login_url:\n        raise RuntimeError("Schoology Student Login URL is not configured.")\n\n    page.goto(login_url, wait_until="domcontentloaded")
     page.wait_for_timeout(2500)
     click_account_tile(page, user)
     page.wait_for_timeout(1000)
