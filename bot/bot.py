@@ -87,6 +87,33 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def text_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await delete_message(update.message)
 
+
+async def background_schoology(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        await asyncio.to_thread(open_schoology_session)
+    except Exception as exc:
+        message = str(exc) or type(exc).__name__
+        await panel(
+            update,
+            context,
+            f"❌ LAUSD: {html.escape(message)[:240]}",
+            school_keyboard(),
+        )
+
+
+async def background_school(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        await asyncio.to_thread(open_school_session)
+    except Exception as exc:
+        message = str(exc) or type(exc).__name__
+        await panel(
+            update,
+            context,
+            f"❌ School Mode: {html.escape(message)[:240]}",
+            school_keyboard(),
+        )
+
+
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     if not allowed(update): return
@@ -100,11 +127,11 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await panel(update,context,"<b>🎓 School Mode</b>",school_keyboard()); return
         if data=="zoom": await agent('POST','/open-zoom'); await panel(update,context,'🎥 Zoom opened.',school_keyboard()); return
         if data=="lausd":
-            asyncio.create_task(asyncio.to_thread(open_schoology_session))
+            asyncio.create_task(background_schoology(update, context))
             await panel(update,context,'🏫 LAUSD login started.',school_keyboard())
             return
         if data=="run_school":
-            asyncio.create_task(asyncio.to_thread(open_school_session))
+            asyncio.create_task(background_school(update, context))
             await panel(update,context,'🚀 School Mode started.',school_keyboard()); return
         if data=="actions": await panel(update,context,'<b>🧩 Actions</b>\nButtons installed from the PC admin panel.',actions_keyboard()); return
         if data.startswith('cmd:'):
