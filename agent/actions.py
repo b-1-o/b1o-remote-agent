@@ -21,15 +21,12 @@ def _spawn(command: list[str]) -> None:
 def _browser_command(url: str) -> list[str]:
     settings = load_settings()
     browser = str(settings.get("browser", "/usr/bin/brave")).strip()
-    profile = str(settings.get(
-        "browser_profile",
-        "~/.local/share/b1o-remote/browser",
-    )).strip()
-    profile = str(Path(profile).expanduser())
+
+    # Regular remote buttons use the user's normal Brave profile.
+    # School automation has its own dedicated Playwright profile.
     return [
         browser,
         "--new-tab",
-        f"--user-data-dir={profile}",
         url,
     ]
 
