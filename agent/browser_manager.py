@@ -10,7 +10,93 @@ from pathlib import Path
 from typing import Any, Callable
 
 from config_store import load_settings
-from automation.school import browser_path, click_account_tile, fill_password
+
+
+def _browser_path(settings: dict) -> str:
+    import shutil
+    import subprocess
+
+    configured = str(settings.get("browser", "")).strip()
+    candidates = [configured] if configured else []
+    for name in ("brave", "brave-browser"):
+        found = shutil.which(name)
+        if found:
+            candidates.append(found)
+    candidates.extend([
+        "/usr/bin/brave",
+        "/usr/bin/brave-browser",
+        "/opt/brave.com/brave/brave",
+    ])
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        path = Path(candidate).expanduser()
+        if not path.is_file():
+            continue
+        try:
+            result = subprocess.run(
+                [str(path), "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except Exception:
+            continue
+        if "brave" in (result.stdout + result.stderr).lower():
+            return str(path)
+
+    raise RuntimeError("Brave Browser was not found.")
+
+
+def _click_account_tile(page, email: str) -> None:
+    candidates = [
+        page.get_by_text(email, exact=True),
+        page.get_by_role("button", name=email),
+        page.locator(f'[aria-label="{email}"]'),
+        page.locator(f'[data-test-id*="tile"]').filter(has_text=email),
+    ]
+
+    for candidate in candidates:
+        try:
+            if candidate.count() and candidate.first.is_visible():
+                candidate.first.click()
+                return
+        except Exception:
+            continue
+
+    identifier = page.locator(
+        'input[type="email"], input[name="loginfmt"], input[name="identifier"]'
+    )
+    if identifier.count() and identifier.first.is_visible():
+        identifier.first.fill(email)
+        button = page.get_by_role(
+            "button",
+            name=re.compile(r"^(next|sign in)$", re.I),
+        )
+        if button.count():
+            button.first.click()
+        else:
+            identifier.first.press("Enter")
+        return
+
+    raise RuntimeError("Could not find the LAUSD/Microsoft account selector.")
+
+
+def _fill_password(page, password: str) -> None:
+    field = page.locator('input[type="password"]')
+    field.first.wait_for(state="visible", timeout=15000)
+    field.first.fill(password)
+    button = page.get_by_role(
+        "button",
+        name=re.compile(r"^(sign in|next|continue)$", re.I),
+    )
+    if button.count():
+        button.first.click()
+    else:
+        field.first.press("Enter")
 
 
 @dataclass
@@ -61,20 +147,6 @@ class BrowserManager:
     def _worker(self) -> None:
         from playwright.sync_api import sync_playwright
 
-        while True:
-            try:
-                self._jobs.get()
-                # Requeue through a tiny wrapper so browser initialization and
-                # the actual job always happen on this same thread.
-                job = self._jobs.task_done
-            except Exception:
-                continue
-
-            # The queue item is retrieved again using a dedicated internal path.
-            # This branch is replaced below by _run_queue for clarity.
-            break
-
-        # Re-enter the real worker loop.
         try:
             with sync_playwright() as pw:
                 self._pw = pw
@@ -86,7 +158,7 @@ class BrowserManager:
 
     def _start_browser(self) -> None:
         settings = load_settings()
-        executable = browser_path(settings)
+        executable = _browser_path(settings)
         profile = Path(
             str(settings.get(
                 "browser_profile",
@@ -163,6 +235,7 @@ class BrowserManager:
 
         def job() -> dict:
             page = self._new_page(slot)
+            reused = bool(page.url and page.url != "about:blank")
             if page.url != url:
                 page.goto(url, wait_until="domcontentloaded", timeout=30000)
             page.bring_to_front()
@@ -171,7 +244,7 @@ class BrowserManager:
                 "action": "open_url",
                 "slot": slot,
                 "url": page.url,
-                "reused": page.url == url,
+                "reused": reused,
             }
 
         return self.call(job)
@@ -241,9 +314,9 @@ class BrowserManager:
                     "url": page.url,
                 }
 
-            click_account_tile(page, user)
+            _click_account_tile(page, user)
             page.wait_for_timeout(1200)
-            fill_password(page, password)
+            _fill_password(page, password)
             page.wait_for_timeout(5000)
             page.bring_to_front()
 
@@ -293,6 +366,51 @@ class BrowserManager:
             return {"success": True, "action": "type", "slot": slot, "length": len(value)}
 
         return self.call(job)
+
+    def start_school_mode(self) -> dict:
+        result = self.login_schoology("lausd")
+
+        settings = load_settings()
+        zoom_time = str(settings.get("zoom_time", "08:30"))
+        try:
+            hour, minute = (int(part) for part in zoom_time.split(":", 1))
+        except ValueError as exc:
+            raise RuntimeError("Invalid Zoom time") from exc
+
+        now = time.localtime()
+        target = time.mktime((
+            now.tm_year,
+            now.tm_mon,
+            now.tm_mday,
+            hour,
+            minute,
+            0,
+            0,
+            0,
+            -1,
+        ))
+        delay = max(0.0, target - time.time())
+
+        if self._school_timer is not None:
+            self._school_timer.cancel()
+
+        if delay <= 0:
+            self.open_zoom("zoom")
+            self._school_timer = None
+        else:
+            self._school_timer = threading.Timer(
+                delay,
+                lambda: self.open_zoom("zoom"),
+            )
+            self._school_timer.daemon = True
+            self._school_timer.start()
+
+        return {
+            "success": True,
+            "action": "school_mode",
+            "lausd": result,
+            "zoom_scheduled_in": round(delay),
+        }
 
     def close_slot(self, slot: str) -> dict:
         def job() -> dict:
