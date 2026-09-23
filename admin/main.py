@@ -126,6 +126,10 @@ def app_js():
         headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
     )
 
+@app.get('/favicon.ico')
+def favicon():
+    return Response(status_code=204)
+
 @app.get('/api/state')
 def state():
     settings = load_settings()
