@@ -75,8 +75,9 @@ h1{font-size:32px;margin:0 0 5px}.muted{color:#8d98a8}.grid{display:grid;grid-te
 .pill{padding:6px 10px;border-radius:999px;font-size:12px;background:#151c24;border:1px solid #2a3540}.ok{color:#8de3a5}.warn{color:#f1ca75}
 .list{display:grid;gap:8px;margin-top:14px}.item{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:12px;border:1px solid #222b35;border-radius:12px;background:#0c1117}.item-title{font-weight:700}.item-sub{font-size:12px;color:#8490a0;margin-top:3px}.empty{padding:18px;border:1px dashed #2a3540;border-radius:12px;color:#7f8b9a;text-align:center}
 .action-row{display:grid;grid-template-columns:160px 1fr auto;gap:8px;align-items:center;margin-top:8px}.action-row input,.action-row select{background:#0b0f14;border:1px solid #2b3540;color:#f2f5f8;border-radius:10px;padding:10px}
+.browser-tab{position:relative;cursor:pointer;transition:transform .15s,border-color .15s}.browser-tab:hover{transform:translateY(-1px);border-color:#3d4b5e}.tab-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#7ee787;box-shadow:0 0 12px #7ee787;margin-right:8px}.tab-menu{display:none;position:absolute;right:12px;top:48px;z-index:20;padding:8px;border:1px solid #303b47;border-radius:12px;background:#121820f5;backdrop-filter:blur(16px);box-shadow:0 18px 40px #0008}.tab-menu.show{display:flex;gap:7px}
 .toast{position:fixed;right:22px;bottom:22px;padding:12px 15px;border:1px solid #303b47;border-radius:12px;background:#121820ee;backdrop-filter:blur(12px);display:none}.toast.show{display:block}
-@media(max-width:900px){.shell{grid-template-columns:1fr}.side{position:static;height:auto;border-right:0;border-bottom:1px solid #202731}.nav{grid-template-columns:repeat(5,1fr)}.nav button{text-align:center;padding:10px 5px}.content{padding:18px}.grid{grid-template-columns:1fr}}
+@media(max-width:900px){.shell{grid-template-columns:1fr}.side{position:static;height:auto;border-right:0;border-bottom:1px solid #202731}.nav{grid-template-columns:repeat(4,1fr)}.nav button{text-align:center;padding:10px 5px}.content{padding:18px}.grid{grid-template-columns:1fr}}
 </style></head><body>
 <div class="shell">
 <aside class="side"><div class="brand"><span>b1o</span> Remote</div>
@@ -154,7 +155,7 @@ h1{font-size:32px;margin:0 0 5px}.muted{color:#8d98a8}.grid{display:grid;grid-te
 <div class="card"><h2>⚙️ System</h2><div id="systemInfo" class="muted">—</div><div class="row spaced"><button class="btn" onclick="reloadAll()">Reload</button></div></div>
 </section>
 </main></div><div id="toast" class="toast"></div>
-<script src="/app.js?v=3"></script></body></html>'''
+<script src="/app.js?v=4"></script></body></html>'''
 
 @app.get('/', response_class=HTMLResponse)
 def home():
