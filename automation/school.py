@@ -1,6 +1,3 @@
-from dotenv import load_dotenv
-load_dotenv()
-
 import os
 import shutil
 import subprocess
@@ -11,27 +8,14 @@ from pathlib import Path
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
-SCHOOLOGY_HOME = "https://lausdschoology.azurewebsites.net/"
+from config_store import load_settings
+
 STUDENT_LOGIN_URL = "https://lausdschoology.azurewebsites.net/en-US/Student/Login"
-SCHOOLOGY_URL = os.getenv("B1O_SCHOOLOGY_URL", STUDENT_LOGIN_URL)
-ZOOM_URL = os.getenv("B1O_ZOOM_URL", "")
-USERNAME = os.getenv("B1O_SCHOOLOGY_USER", "").strip()
-PASSWORD = os.getenv("B1O_SCHOOLOGY_PASSWORD", "")
-BROWSER_EXECUTABLE = os.getenv("B1O_BROWSER_EXECUTABLE", "").strip()
-PROFILE_DIR = Path(
-    os.getenv(
-        "B1O_BROWSER_PROFILE",
-        "~/.local/share/b1o-remote/browser",
-    )
-).expanduser()
-ZOOM_TIME = os.getenv("B1O_ZOOM_TIME", "08:28")
 
 
-def browser_path() -> str:
-    candidates: list[str] = []
-
-    if BROWSER_EXECUTABLE:
-        candidates.append(str(Path(BROWSER_EXECUTABLE).expanduser()))
+def browser_path(settings: dict) -> str:
+    configured = str(settings.get("browser", "")).strip()
+    candidates = [configured] if configured else []
 
     for name in ("brave", "brave-browser"):
         found = shutil.which(name)
@@ -53,7 +37,7 @@ def browser_path() -> str:
             continue
         seen.add(candidate)
 
-        path = Path(candidate)
+        path = Path(candidate).expanduser()
         if not path.is_file():
             continue
 
@@ -67,19 +51,15 @@ def browser_path() -> str:
         except Exception:
             continue
 
-        version = (result.stdout + result.stderr).lower()
-        if "brave" in version:
+        if "brave" in (result.stdout + result.stderr).lower():
             return str(path)
 
     raise RuntimeError(
-        "Brave Browser was not found. Set B1O_BROWSER_EXECUTABLE "
-        "to the path of Brave (for example /usr/bin/brave)."
+        "Brave Browser was not found. Configure it from Telegram settings."
     )
 
 
-def click_account_tile(page) -> None:
-    email = USERNAME
-
+def click_account_tile(page, email: str) -> None:
     candidates = [
         page.get_by_text(email, exact=True),
         page.get_by_role("button", name=email),
@@ -95,8 +75,6 @@ def click_account_tile(page) -> None:
         except Exception:
             continue
 
-    # Microsoft can render the account tile as a button containing the email
-    # rather than as a plain text node.
     try:
         candidate = page.locator("div[role='button']").filter(has_text=email)
         for index in range(candidate.count()):
@@ -107,17 +85,17 @@ def click_account_tile(page) -> None:
     except Exception:
         pass
 
-    # Some sign-in flows skip the tile and show the identifier input directly.
     identifier = page.locator(
         'input[type="email"], input[name="loginfmt"], input[name="identifier"]'
     )
+
     if identifier.count() > 0 and identifier.first.is_visible():
         identifier.first.fill(email)
-
         next_button = page.get_by_role(
             "button",
             name=r"(?i)^(next|sign in)$",
         )
+
         if next_button.count() > 0:
             next_button.first.click()
         else:
@@ -129,17 +107,17 @@ def click_account_tile(page) -> None:
     )
 
 
-def fill_password(page) -> None:
+def fill_password(page, password_value: str) -> None:
     password = page.locator('input[type="password"]')
 
     try:
         password.first.wait_for(state="visible", timeout=10000)
     except PlaywrightTimeoutError as exc:
         raise RuntimeError(
-            "Microsoft login opened, but the password field did not appear."
+            "The password field did not appear after selecting the account."
         ) from exc
 
-    password.first.fill(PASSWORD)
+    password.first.fill(password_value)
 
     sign_in = page.get_by_role(
         "button",
@@ -152,50 +130,35 @@ def fill_password(page) -> None:
         password.first.press("Enter")
 
 
-def login_schoology(page) -> None:
-    # Direct Student Login starts the current LAUSD SSO flow and redirects
-    # through Microsoft. This avoids relying on the image-based Students
-    # button on the public landing page.
+def login_schoology(page, settings: dict) -> None:
+    user = str(settings.get("schoology_user", "")).strip()
+    password = str(settings.get("schoology_password", ""))
+
+    if not user or not password:
+        raise RuntimeError(
+            "Schoology email/password are not configured. Open Telegram → Settings."
+        )
+
     page.goto(STUDENT_LOGIN_URL, wait_until="domcontentloaded")
     page.wait_for_timeout(2500)
-
-    try:
-        click_account_tile(page)
-    except RuntimeError:
-        # Some Microsoft sessions show the identifier field instead of an
-        # account tile. Let the helper handle that path.
-        raise
-
+    click_account_tile(page, user)
     page.wait_for_timeout(1000)
-
-    fill_password(page)
+    fill_password(page, password)
     page.wait_for_timeout(5000)
 
 
-def wait_until(hour: int, minute: int) -> None:
-    now = datetime.now()
-    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if target <= now:
-        return
-    time.sleep((target - now).total_seconds())
+def open_school_session() -> None:
+    settings = load_settings()
 
-
-def main() -> None:
-    if not USERNAME or not PASSWORD:
-        raise RuntimeError(
-            "Set B1O_SCHOOLOGY_USER and B1O_SCHOOLOGY_PASSWORD in .env"
-        )
-
-    if not ZOOM_URL:
-        raise RuntimeError("Set B1O_ZOOM_URL in .env")
-
-    PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-
-    executable = browser_path()
+    executable = browser_path(settings)
+    profile_dir = Path(
+        str(settings["browser_profile"])
+    ).expanduser()
+    profile_dir.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as pw:
         context = pw.chromium.launch_persistent_context(
-            user_data_dir=str(PROFILE_DIR),
+            user_data_dir=str(profile_dir),
             executable_path=executable,
             headless=False,
             args=[
@@ -205,20 +168,83 @@ def main() -> None:
         )
 
         page = context.pages[0] if context.pages else context.new_page()
+        login_schoology(page, settings)
 
-        login_schoology(page)
+        zoom_url = str(settings.get("zoom_url", "")).strip()
+        if zoom_url:
+            zoom_hour, zoom_minute = (
+                int(value) for value in settings["zoom_time"].split(":", 1)
+            )
+            wait_until(zoom_hour, zoom_minute)
 
-        zoom_hour, zoom_minute = (
-            int(value) for value in ZOOM_TIME.split(":", 1)
-        )
-        wait_until(zoom_hour, zoom_minute)
-
-        zoom_page = context.new_page()
-        zoom_page.goto(ZOOM_URL, wait_until="domcontentloaded")
-        zoom_page.bring_to_front()
+            zoom_page = context.new_page()
+            zoom_page.goto(zoom_url, wait_until="domcontentloaded")
+            zoom_page.bring_to_front()
 
         while True:
             time.sleep(60)
+
+
+def wait_until(hour: int, minute: int) -> None:
+    now = datetime.now()
+    target = now.replace(
+        hour=hour,
+        minute=minute,
+        second=0,
+        microsecond=0,
+    )
+
+    if target <= now:
+        return
+
+    time.sleep((target - now).total_seconds())
+
+
+def should_run_today(settings: dict) -> bool:
+    now = datetime.now()
+    if not settings.get("school_enabled", True):
+        return False
+
+    if now.weekday() not in settings.get("school_days", [0, 1, 2, 3, 4]):
+        return False
+
+    return True
+
+
+def time_matches(value: str, now: datetime) -> bool:
+    try:
+        hour, minute = (int(part) for part in value.split(":", 1))
+    except (ValueError, TypeError):
+        return False
+
+    return now.hour == hour and now.minute == minute
+
+
+def scheduler_loop() -> None:
+    last_school_date: str | None = None
+
+    while True:
+        settings = load_settings()
+        now = datetime.now()
+
+        if should_run_today(settings):
+            today = now.date().isoformat()
+
+            if last_school_date != today and time_matches(
+                settings["school_time"], now
+            ):
+                last_school_date = today
+
+                try:
+                    open_school_session()
+                except Exception as exc:
+                    print(f"School Mode error: {type(exc).__name__}: {exc}")
+
+        time.sleep(20)
+
+
+def main() -> None:
+    scheduler_loop()
 
 
 if __name__ == "__main__":
