@@ -51,6 +51,7 @@ async def agent_request(method: str, path: str) -> dict:
 def main_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("⚡ WAKE PC", callback_data="wake")],
+        [InlineKeyboardButton("🔓 UNLOCK SESSION", callback_data="unlock")],
         [InlineKeyboardButton("🎓 SCHOOL MODE", callback_data="school")],
         [InlineKeyboardButton("⚙️ SETTINGS", callback_data="settings")],
         [InlineKeyboardButton("📊 STATUS", callback_data="status")],
@@ -246,6 +247,27 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data or ""
 
     try:
+        if data == "unlock":
+            try:
+                result = await agent_request("POST", "/unlock")
+            except Exception as exc:
+                await query.edit_message_text(
+                    f"🔓 Unlock failed: {type(exc).__name__}",
+                    reply_markup=main_keyboard(),
+                )
+                return
+
+            if result.get("success"):
+                await query.edit_message_text(
+                    "🔓 Unlock request sent to the existing user session.",
+                    reply_markup=main_keyboard(),
+                )
+            else:
+                await query.edit_message_text(
+                    "🔒 No existing user session could be unlocked. If the PC is at the login screen, enter the OS password locally.",
+                    reply_markup=main_keyboard(),
+                )
+            return
         if data == "wake":
             if not WOL_RELAY_URL or not WOL_RELAY_TOKEN:
                 await query.edit_message_text(
