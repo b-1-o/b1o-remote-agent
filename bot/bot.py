@@ -10,7 +10,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 from commands_store import load_commands
 from config_store import load_settings
 from runner import execute_command_sync
-from automation.school import open_school_session
+from automation.school import open_school_session, open_schoology_session
 
 AGENT_URL = os.getenv("B1O_AGENT_URL", "http://127.0.0.1:8765")
 AGENT_TOKEN = os.getenv("B1O_REMOTE_TOKEN", "")
@@ -99,17 +99,38 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             s=load_settings(); s['school_enabled']=not s['school_enabled']; save_settings(s)
             await panel(update,context,"<b>🎓 School Mode</b>",school_keyboard()); return
         if data=="zoom": await agent('POST','/open-zoom'); await panel(update,context,'🎥 Zoom opened.',school_keyboard()); return
-        if data=="lausd": await agent('POST','/open-schoology'); await panel(update,context,'🏫 LAUSD opened.',school_keyboard()); return
+        if data=="lausd":
+            asyncio.create_task(asyncio.to_thread(open_schoology_session))
+            await panel(update,context,'🏫 LAUSD login started.',school_keyboard())
+            return
         if data=="run_school":
             import asyncio
             asyncio.create_task(asyncio.to_thread(open_school_session))
             await panel(update,context,'🚀 School Mode started.',school_keyboard()); return
         if data=="actions": await panel(update,context,'<b>🧩 Actions</b>\nButtons installed from the PC admin panel.',actions_keyboard()); return
         if data.startswith('cmd:'):
-            cid=data.split(':',1)[1]; cmd=next((x for x in load_commands() if x['id']==cid),None)
-            if not cmd: raise RuntimeError('Command not found')
-            await asyncio.to_thread(execute_command_sync,cmd)
-            await panel(update,context,f"✅ {html.escape(cmd['title'])}",actions_keyboard()); return
+            command_id = data.split(':',1)[1]
+            command = next(
+                (item for item in load_commands() if item['id'] == command_id),
+                None,
+            )
+            if command is None:
+                raise RuntimeError('Command not found')
+
+            try:
+                await asyncio.to_thread(execute_command_sync, command)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Command {command_id} failed: {type(exc).__name__}: {exc}"
+                ) from exc
+
+            await panel(
+                update,
+                context,
+                f"✅ {html.escape(command['title'])}",
+                actions_keyboard(),
+            )
+            return
         if data=='status':
             r=await agent('GET','/status'); await panel(update,context,f"🟢 Online\nHost: <code>{html.escape(r['hostname'])}</code>",home_keyboard()); return
         if data=='unlock':
@@ -118,7 +139,13 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data=='shutdown': await agent('POST','/shutdown'); await panel(update,context,'⏻ Shutdown requested.',home_keyboard()); return
         if data=='noop': return
     except Exception as exc:
-        await panel(update,context,f"❌ {type(exc).__name__}",home_keyboard())
+        message = str(exc) or type(exc).__name__
+        await panel(
+            update,
+            context,
+            f"❌ {html.escape(message)[:220]}",
+            home_keyboard(),
+        )
 
 def main() -> None:
     if not TELEGRAM_TOKEN: raise RuntimeError('B1O_TELEGRAM_TOKEN is not configured')
