@@ -441,6 +441,8 @@ class BrowserManager:
                 "url": page.url,
             }
 
+        return self.call(job)
+
     def _open_zoom_chat_panel(self) -> None:
         self._cleanup_tabs()
         page = self._tabs.get("zoom")
@@ -480,8 +482,29 @@ class BrowserManager:
 
         def job() -> dict:
             page = self._new_page(slot)
+
+            # Reuse an already-authenticated LAUSD tab instead of restarting
+            # the Microsoft login flow on every Telegram/Admin click.
+            current = (page.url or "").lower()
+            if (
+                current
+                and current != "about:blank"
+                and "login.microsoftonline.com" not in current
+                and "login.live.com" not in current
+                and "student/login" not in current
+                and "login" not in current
+            ):
+                page.bring_to_front()
+                return {
+                    "success": True,
+                    "action": "schoology_login",
+                    "slot": slot,
+                    "already_logged_in": True,
+                    "url": page.url,
+                }
+
             page.goto(login_url, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(2500)
+            page.wait_for_timeout(3000)
 
             current = page.url.lower()
             if "schoology" in current and "student/login" not in current and "login" not in current:
@@ -494,10 +517,34 @@ class BrowserManager:
                     "url": page.url,
                 }
 
-            _click_account_tile(page, user)
-            page.wait_for_timeout(1200)
+            # Microsoft can land directly on the password step when a prior
+            # account choice is remembered. Handle that before looking for the
+            # account tile/email field.
+            password_field = page.locator('input[type="password"]')
+            try:
+                has_password = password_field.count() and password_field.first.is_visible()
+            except Exception:
+                has_password = False
+
+            if not has_password:
+                _click_account_tile(page, user)
+                page.wait_for_timeout(1200)
+
             _fill_password(page, password)
-            page.wait_for_timeout(5000)
+
+            # Microsoft may show the optional "Stay signed in?" step.
+            page.wait_for_timeout(1200)
+            stay_yes = self._first_visible([
+                page.get_by_role("button", name=re.compile(r"^yes$", re.I)),
+                page.get_by_text(re.compile(r"^yes$", re.I)),
+            ])
+            if stay_yes is not None:
+                try:
+                    stay_yes.click()
+                except Exception:
+                    pass
+
+            page.wait_for_timeout(6000)
             page.bring_to_front()
 
             return {
