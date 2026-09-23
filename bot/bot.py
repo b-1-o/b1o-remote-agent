@@ -9,8 +9,6 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 
 from commands_store import load_commands
 from config_store import load_settings
-from runner import execute_command_sync
-from automation.school import open_school_session, open_schoology_session
 
 AGENT_URL = os.getenv("B1O_AGENT_URL", "http://127.0.0.1:8765")
 AGENT_TOKEN = os.getenv("B1O_REMOTE_TOKEN", "")
@@ -97,7 +95,7 @@ async def text_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def background_schoology(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
-        await asyncio.to_thread(open_schoology_session)
+        await agent('POST','/open-schoology-login')
     except Exception as exc:
         message = str(exc) or type(exc).__name__
         await panel(
@@ -110,7 +108,7 @@ async def background_schoology(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def background_school(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
-        await asyncio.to_thread(open_school_session)
+        await agent('POST','/school/start')
     except Exception as exc:
         message = str(exc) or type(exc).__name__
         await panel(
@@ -151,7 +149,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 raise RuntimeError('Command not found')
 
             try:
-                await asyncio.to_thread(execute_command_sync, command)
+                await agent('POST','/run-command', command)
             except Exception as exc:
                 raise RuntimeError(
                     f"Command {command_id} failed: {type(exc).__name__}: {exc}"
