@@ -100,3 +100,39 @@ systemctl --user enable --now b1o-school.service
 ```
 
 The old `b1o-school.timer` is not required for the configurable scheduler.
+
+
+## Telegram controller
+
+The bot keeps one persistent control panel message and removes transient input messages when possible. The main UI has School, Browser, Keyboard, Commands, Settings, Status, Lock and Shutdown.
+
+School Mode has separate `Zoom` and `LAUSD` actions plus a full scheduled run.
+
+### Remote keyboard
+
+The Keyboard panel sends only predefined key combinations and text through the local agent. The implementation uses `ydotool`, which provides virtual keyboard input on Linux; the Arch/CachyOS package includes `ydotool` and a user service. `ydotool` requires access to `/dev/uinput` and the `ydotoold` daemon.
+
+Install on CachyOS:
+
+```bash
+sudo pacman -S ydotool
+systemctl --user enable --now ydotool.service
+```
+
+Do not expose the agent beyond localhost. The bot is restricted to the configured Telegram chat ID.
+
+### Admin command packs
+
+Upload a JSON file from Telegram → Commands → Upload command pack. Only these action types are accepted:
+
+- `open_url`
+- `key`
+- `type`
+- `open_zoom`
+- `open_schoology`
+
+Arbitrary shell commands are intentionally rejected. See `examples/commands.json` for the format.
+
+### Unlock
+
+The Unlock button asks for the PC password once. The bot deletes the Telegram message after receiving it and does not write the password to the settings file. The local agent uses the configured input helper to type it and press Enter.
