@@ -123,6 +123,7 @@ class BrowserManager:
         self._zoom_seen: set[str] = set()
         self._school_timer: threading.Timer | None = None
         self._pw = None
+        self._browser = None
         self._context = None
 
     def _ensure_started(self) -> None:
@@ -154,18 +155,14 @@ class BrowserManager:
                 self._run_queue()
         except Exception:
             self._pw = None
+            self._browser = None
             self._context = None
 
     def _start_browser(self) -> None:
         settings = load_settings()
         executable = _browser_path(settings)
-        # The managed browser owns a dedicated Brave profile so it never
-        # collides with the user's normal Brave profile.
-        profile = Path("~/.local/share/b1o-remote/control-browser").expanduser()
-        profile.mkdir(parents=True, exist_ok=True)
 
-        self._context = self._pw.chromium.launch_persistent_context(
-            user_data_dir=str(profile),
+        browser = self._pw.chromium.launch(
             executable_path=executable,
             headless=False,
             args=[
@@ -174,11 +171,8 @@ class BrowserManager:
                 "--disable-session-crashed-bubble",
             ],
         )
-
-        # Existing tabs from our profile are retained and indexed later.
-        for index, page in enumerate(self._context.pages):
-            if not page.is_closed():
-                self._tabs.setdefault(f"existing_{index}", page)
+        self._browser = browser
+        self._context = browser.new_context()
 
     def _context_is_alive(self) -> bool:
         if self._context is None:
@@ -265,96 +259,49 @@ class BrowserManager:
 
         meeting = re.search(r"/j/(\d+)", invite_url)
         if not meeting:
-            raise RuntimeError(
-                "Zoom URL must contain a meeting ID like /j/1234567890"
-            )
+            raise RuntimeError("Zoom URL must contain a meeting ID like /j/1234567890")
 
         meeting_id = meeting.group(1)
+        web_url = f"https://app.zoom.us/wc/join/{meeting_id}"
 
         def job() -> dict:
             page = self._new_page(slot)
-
-            # Use Zoom's Web App instead of the invite launcher. This avoids
-            # the external xdg-open / zoommtg application dialog.
-            page.goto(
-                "https://app.zoom.us/wc",
-                wait_until="domcontentloaded",
-                timeout=30000,
-            )
-            page.wait_for_timeout(1500)
-
-            # If the Web App opens directly to a meeting-id form, use it.
-            meeting_input = page.locator(
-                'input[placeholder*="Meeting ID" i], '
-                'input[aria-label*="Meeting ID" i], '
-                'input[name*="meeting" i]'
-            )
-
-            if meeting_input.count() and meeting_input.first.is_visible():
-                meeting_input.first.fill(meeting_id)
-                join = page.get_by_role(
-                    "button",
-                    name=re.compile(r"^join$", re.I),
+            if page.url != web_url:
+                page.goto(
+                    web_url,
+                    wait_until="domcontentloaded",
+                    timeout=30000,
                 )
-                if join.count():
-                    join.first.click()
-                else:
-                    meeting_input.first.press("Enter")
-            else:
-                # Some Web App versions first show a "Join Meeting" landing
-                # button before the meeting ID field appears.
-                join_meeting = page.get_by_text(
-                    re.compile(r"^join meeting$", re.I)
-                )
-                if join_meeting.count():
-                    join_meeting.first.click()
-                    page.wait_for_timeout(800)
-
-                meeting_input = page.locator(
-                    'input[placeholder*="Meeting ID" i], '
-                    'input[aria-label*="Meeting ID" i], '
-                    'input[name*="meeting" i]'
-                )
-                if not meeting_input.count():
-                    raise RuntimeError(
-                        "Zoom Web App did not show the Meeting ID field."
-                    )
-
-                meeting_input.first.fill(meeting_id)
-                join = page.get_by_role(
-                    "button",
-                    name=re.compile(r"^join$", re.I),
-                )
-                if join.count():
-                    join.first.click()
-                else:
-                    meeting_input.first.press("Enter")
 
             page.wait_for_timeout(1500)
 
-            # Handle the web launcher page if Zoom still presents it.
+            # Prefer the browser-based join path. No zoommtg/xdg-open launcher.
             browser_join = page.get_by_text(
-                re.compile(r"join from your browser", re.I)
+                re.compile(r"join from your browser|join from browser", re.I)
             )
-            if browser_join.count():
+            for index in range(min(browser_join.count(), 3)):
                 try:
-                    browser_join.first.click()
+                    item = browser_join.nth(index)
+                    if item.is_visible():
+                        item.click()
+                        break
                 except Exception:
-                    pass
+                    continue
 
-            # Cancel any in-page application-launch dialog if one is rendered.
             cancel = page.get_by_role(
                 "button",
                 name=re.compile(r"^cancel$", re.I),
             )
-            if cancel.count():
+            for index in range(min(cancel.count(), 2)):
                 try:
-                    cancel.first.click()
+                    item = cancel.nth(index)
+                    if item.is_visible():
+                        item.click()
+                        break
                 except Exception:
-                    pass
+                    continue
 
             page.bring_to_front()
-
             return {
                 "success": True,
                 "action": "open_zoom",
@@ -363,14 +310,8 @@ class BrowserManager:
                 "url": page.url,
             }
 
-        result = self.call(job)
+        return self.call(job)
 
-        try:
-            self.call(lambda: self._open_zoom_chat_panel())
-        except Exception:
-            pass
-
-        return result
 
     def _open_zoom_chat_panel(self) -> None:
         self._cleanup_tabs()
