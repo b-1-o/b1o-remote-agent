@@ -1,5 +1,5 @@
 import fcntl
-import os
+import re
 import shutil
 import subprocess
 import time
@@ -97,7 +97,7 @@ def click_account_tile(page, email: str) -> None:
         identifier.first.fill(email)
         next_button = page.get_by_role(
             "button",
-            name=r"(?i)^(next|sign in)$",
+            name=re.compile(r"^(next|sign in)$", re.I),
         )
 
         if next_button.count() > 0:
@@ -125,7 +125,7 @@ def fill_password(page, password_value: str) -> None:
 
     sign_in = page.get_by_role(
         "button",
-        name=r"(?i)^(sign in|next|continue)$",
+        name=re.compile(r"^(sign in|next|continue)$", re.I),
     )
 
     if sign_in.count() > 0:
@@ -183,11 +183,9 @@ def _run_locked_session(worker) -> None:
 
 def _prepare_school_context(settings: dict):
     executable = browser_path(settings)
-    SCHOOL_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
 
     pw = sync_playwright().start()
-    context = pw.chromium.launch_persistent_context(
-        user_data_dir=str(SCHOOL_PROFILE_DIR),
+    browser = pw.chromium.launch(
         executable_path=executable,
         headless=False,
         args=[
@@ -196,23 +194,14 @@ def _prepare_school_context(settings: dict):
             "--disable-session-crashed-bubble",
         ],
     )
+    context = browser.new_context()
+    page = context.new_page()
 
-    if context.pages:
-        page = context.pages[0]
-        for extra in list(context.pages[1:]):
-            try:
-                extra.close()
-            except Exception:
-                pass
-    else:
-        page = context.new_page()
-
-    return pw, context, page
-
+    return pw, browser, context, page
 def open_schoology_session() -> None:
     def worker():
         settings = load_settings()
-        pw, context, page = _prepare_school_context(settings)
+        pw, browser, context, page = _prepare_school_context(settings)
         try:
             login_schoology(page, settings)
             page.bring_to_front()
@@ -222,6 +211,7 @@ def open_schoology_session() -> None:
             try:
                 context.close()
             finally:
+                browser.close()
                 pw.stop()
 
     _run_locked_session(worker)
@@ -230,7 +220,7 @@ def open_schoology_session() -> None:
 def open_school_session() -> None:
     def worker():
         settings = load_settings()
-        pw, context, page = _prepare_school_context(settings)
+        pw, browser, context, page = _prepare_school_context(settings)
         try:
             login_schoology(page, settings)
 
@@ -254,6 +244,7 @@ def open_school_session() -> None:
             try:
                 context.close()
             finally:
+                browser.close()
                 pw.stop()
 
     _run_locked_session(worker)
