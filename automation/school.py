@@ -12,7 +12,8 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
 SCHOOLOGY_HOME = "https://lausdschoology.azurewebsites.net/"
-SCHOOLOGY_URL = os.getenv("B1O_SCHOOLOGY_URL", SCHOOLOGY_HOME)
+STUDENT_LOGIN_URL = "https://lausdschoology.azurewebsites.net/en-US/Student/Login"
+SCHOOLOGY_URL = os.getenv("B1O_SCHOOLOGY_URL", STUDENT_LOGIN_URL)
 ZOOM_URL = os.getenv("B1O_ZOOM_URL", "")
 USERNAME = os.getenv("B1O_SCHOOLOGY_USER", "").strip()
 PASSWORD = os.getenv("B1O_SCHOOLOGY_PASSWORD", "")
@@ -73,27 +74,6 @@ def browser_path() -> str:
     raise RuntimeError(
         "Brave Browser was not found. Set B1O_BROWSER_EXECUTABLE "
         "to the path of Brave (for example /usr/bin/brave)."
-    )
-
-
-def click_students(page) -> None:
-    candidates = [
-        page.get_by_role("link", name=r"(?i)^students$"),
-        page.get_by_role("button", name=r"(?i)^students$"),
-        page.get_by_text("Students", exact=True),
-    ]
-
-    for candidate in candidates:
-        try:
-            if candidate.count() > 0 and candidate.first.is_visible():
-                candidate.first.click()
-                page.wait_for_load_state("domcontentloaded")
-                return
-        except Exception:
-            continue
-
-    raise RuntimeError(
-        "Could not find the Students button on the LAUSD Schoology page."
     )
 
 
@@ -173,15 +153,19 @@ def fill_password(page) -> None:
 
 
 def login_schoology(page) -> None:
-    # The LAUSD public page has a Student option. Selecting it starts the
-    # district SSO flow, which currently redirects through Microsoft SAML.
-    page.goto(SCHOOLOGY_HOME, wait_until="domcontentloaded")
-    page.wait_for_timeout(1500)
+    # Direct Student Login starts the current LAUSD SSO flow and redirects
+    # through Microsoft. This avoids relying on the image-based Students
+    # button on the public landing page.
+    page.goto(STUDENT_LOGIN_URL, wait_until="domcontentloaded")
+    page.wait_for_timeout(2500)
 
-    click_students(page)
-    page.wait_for_timeout(1500)
+    try:
+        click_account_tile(page)
+    except RuntimeError:
+        # Some Microsoft sessions show the identifier field instead of an
+        # account tile. Let the helper handle that path.
+        raise
 
-    click_account_tile(page)
     page.wait_for_timeout(1000)
 
     fill_password(page)
