@@ -136,3 +136,16 @@ Arbitrary shell commands are intentionally rejected. See `examples/commands.json
 ### Unlock
 
 The Unlock button asks for the PC password once. The bot deletes the Telegram message after receiving it and does not write the password to the settings file. The local agent uses the configured input helper to type it and press Enter.
+
+
+## Architecture
+
+PC Admin (`http://127.0.0.1:8788`) is the only configuration surface. It manages School Mode, links, schedule, PC unlock password, Brave and custom Telegram buttons.
+
+Telegram is runtime-only: School Mode ON/OFF, Zoom, LAUSD, custom buttons, Status, Unlock, Lock and Shutdown. It does not expose settings or command uploads.
+
+The Telegram panel keeps one message and transient user messages are deleted when possible.
+
+Custom buttons are stored locally and can be created/deleted from the Admin panel. Schedules can trigger those commands automatically.
+
+Do not expose the Admin panel outside localhost without adding authentication and transport security.
