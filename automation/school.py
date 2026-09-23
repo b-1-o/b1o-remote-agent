@@ -10,6 +10,8 @@ from playwright.sync_api import sync_playwright
 
 from config_store import load_settings
 
+_SCHOOL_SESSION_RUNNING = False
+
 
 
 def browser_path(settings: dict) -> str:
@@ -151,6 +153,19 @@ def login_schoology(page, settings: dict) -> None:
 
 
 def open_school_session() -> None:
+    global _SCHOOL_SESSION_RUNNING
+
+    if _SCHOOL_SESSION_RUNNING:
+        return
+
+    _SCHOOL_SESSION_RUNNING = True
+    try:
+        _open_school_session()
+    finally:
+        _SCHOOL_SESSION_RUNNING = False
+
+
+def _open_school_session() -> None:
     settings = load_settings()
 
     executable = browser_path(settings)
