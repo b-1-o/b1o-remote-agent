@@ -81,9 +81,24 @@ def unlock_with_password(password: str) -> dict:
 
 
 def unlock_configured() -> dict:
-    from config_store import load_settings
+    try:
+        from .actions import unlock_session
+        session_result = unlock_session()
+        if session_result.get("success"):
+            return session_result
+    except Exception:
+        pass
 
+    from config_store import load_settings
     password = str(load_settings().get("pc_unlock_password", ""))
     if not password:
-        raise RuntimeError("PC unlock password is not configured in Admin.")
-    return unlock_with_password(password)
+        raise RuntimeError(
+            "Automatic session unlock failed and no PC unlock password is configured."
+        )
+
+    try:
+        return unlock_with_password(password)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Password unlock failed: {type(exc).__name__}: {exc}"
+        ) from exc
