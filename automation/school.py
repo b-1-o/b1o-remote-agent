@@ -138,7 +138,11 @@ def login_schoology(page, settings: dict) -> None:
             "Schoology email/password are not configured. Open Telegram → Settings."
         )
 
-    login_url = str(settings.get("schoology_url", "")).strip()\n    if not login_url:\n        raise RuntimeError("Schoology Student Login URL is not configured.")\n\n    page.goto(login_url, wait_until="domcontentloaded")
+    login_url = str(settings.get("schoology_url", "")).strip()
+    if not login_url:
+        raise RuntimeError("Schoology Student Login URL is not configured.")
+
+    page.goto(login_url, wait_until="domcontentloaded")
     page.wait_for_timeout(2500)
     click_account_tile(page, user)
     page.wait_for_timeout(1000)
