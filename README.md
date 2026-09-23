@@ -72,3 +72,31 @@ Never commit .env.
 The scheduler uses a persistent browser profile so a normal school session can be reused when possible. If the district presents MFA, CAPTCHA, or another interactive security check, the user must complete it manually.
 
 School Mode does not auto-generate or submit schoolwork. Opening assignment links and typing/submitting answers remains a user-controlled action.
+
+
+## Telegram control panel
+
+The bot is the main configuration UI.
+
+Open `/start` and use:
+
+- School Mode: enable/disable and run now
+- Settings: Schoology URL, email, password, school time, Zoom time, school days, Zoom URL, Brave path, browser profile
+- Status, lock and shutdown
+
+Settings are stored locally at `~/.local/share/b1o-remote/settings.json` with owner-only permissions.
+
+The Schoology password is never displayed by the bot. When the password is sent to the bot, the bot attempts to delete that Telegram message immediately after saving it locally.
+
+The bot only accepts messages and buttons from `B1O_TELEGRAM_CHAT_ID`.
+
+For Telegram-configurable scheduling, enable the long-running `b1o-school.service`:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp systemd/b1o-school.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now b1o-school.service
+```
+
+The old `b1o-school.timer` is not required for the configurable scheduler.
