@@ -566,75 +566,26 @@ class BrowserManager:
         if not invite_url:
             raise RuntimeError("Zoom URL is not configured")
 
-        meeting = re.search(r"/j/(\d+)", invite_url)
+        meeting = re.search(r"/j/(\\d+)", invite_url)
         if not meeting:
             raise RuntimeError(
                 "Zoom URL must contain a meeting ID like /j/1234567890"
             )
 
         meeting_id = meeting.group(1)
+
+        # IMPORTANT: never navigate to the invite URL here. Zoom invite pages
+        # intentionally try to launch the desktop client via zoommtg://, which
+        # invokes xdg-open on Linux. Going directly to the Web App avoids that
+        # external-protocol handoff entirely.
         web_url = f"https://app.zoom.us/wc/join/{meeting_id}"
-
-        def finish_prejoin() -> None:
-            def job() -> dict:
-                page = self._tabs.get(slot)
-                if page is None or page.is_closed():
-                    return {"success": False, "action": "zoom_prepare", "reason": "tab_closed"}
-
-                try:
-                    page.bring_to_front()
-                    self._grant_zoom_media_permissions(page)
-                    page.wait_for_timeout(1500)
-
-                    # First try the official invite/browser flow. If it does
-                    # not expose a browser-join link, use the direct Web App
-                    # URL as a fallback.
-                    before = page.url
-                    self._prepare_zoom_join(page)
-
-                    browser_ready = (
-                        "app.zoom.us" in page.url
-                        or "zoom.us/wc/" in page.url
-                    )
-                    if not browser_ready and page.url != web_url:
-                        page.goto(
-                            web_url,
-                            wait_until="domcontentloaded",
-                            timeout=30000,
-                        )
-                        page.wait_for_timeout(2500)
-                        self._grant_zoom_media_permissions(page)
-                        self._prepare_zoom_join(page)
-
-                    page.bring_to_front()
-                    return {
-                        "success": True,
-                        "action": "zoom_prepare",
-                        "slot": slot,
-                        "url_before": before,
-                        "url_after": page.url,
-                        "title": page.title(),
-                    }
-                except Exception as exc:
-                    return {
-                        "success": False,
-                        "action": "zoom_prepare",
-                        "error": f"{type(exc).__name__}: {exc}",
-                    }
-
-            try:
-                self.call(job)
-            except Exception:
-                pass
 
         def job() -> dict:
             page = self._new_page(slot)
 
-            # Open the configured invite URL first. This gives Zoom its normal
-            # join flow and makes the Brave window appear immediately.
-            if page.url != invite_url:
+            if page.url != web_url:
                 page.goto(
-                    invite_url,
+                    web_url,
                     wait_until="domcontentloaded",
                     timeout=30000,
                 )
@@ -642,16 +593,20 @@ class BrowserManager:
             page.bring_to_front()
             self._grant_zoom_media_permissions(page)
 
-            timer = threading.Timer(0.8, finish_prejoin)
-            timer.daemon = True
-            timer.start()
+            # Let the Web App render its browser-join/pre-join UI, then run
+            # the name + camera + microphone preparation in the same manager
+            # thread.
+            page.wait_for_timeout(2500)
+            join_state = self._prepare_zoom_join(page)
+            page.wait_for_timeout(500)
+            page.bring_to_front()
 
             return {
                 "success": True,
                 "action": "open_zoom",
                 "slot": slot,
                 "meeting_id": meeting_id,
-                "prejoin_scheduled": True,
+                "joined": join_state["joined"],
                 "url": page.url,
             }
 
