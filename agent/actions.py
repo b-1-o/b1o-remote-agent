@@ -24,3 +24,34 @@ def lock_pc() -> dict:
 def shutdown_pc() -> dict:
     _spawn(["systemctl", "poweroff"])
     return {"success": True, "action": "shutdown"}
+
+def unlock_session() -> dict:
+    username = subprocess.check_output(["id", "-un"], text=True).strip()
+
+    sessions = subprocess.check_output(
+        ["loginctl", "list-sessions", "--no-legend"],
+        text=True,
+    ).splitlines()
+
+    unlocked = []
+    for line in sessions:
+        parts = line.split()
+        if len(parts) < 3 or parts[2] != username:
+            continue
+
+        session_id = parts[0]
+        result = subprocess.run(
+            ["loginctl", "unlock-session", session_id],
+            capture_output=True,
+            text=True,
+        )
+
+        if result.returncode == 0:
+            unlocked.append(session_id)
+
+    return {
+        "success": bool(unlocked),
+        "action": "unlock",
+        "sessions": unlocked,
+        "note": "Targets only an existing user session; the OS login password is not transmitted.",
+    }
