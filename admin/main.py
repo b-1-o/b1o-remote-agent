@@ -10,6 +10,8 @@ from commands_store import COMMANDS_DIR, install_pack, load_commands
 from config_store import load_settings, save_settings
 from runner import execute_command_sync
 from schedule_store import delete_schedule, load_schedules, upsert_schedule
+from agent.actions import get_status, lock_pc, shutdown_pc
+from agent.input_actions import unlock_configured
 
 app = FastAPI(title="b1o Remote Admin")
 
@@ -132,7 +134,7 @@ async function saveSchedule(){const body={id:$('sch_id').value.trim(),title:$('s
 function clearSchedule(){$('sch_id').value='';$('sch_title').value='';$('sch_time').value='';$('sch_days').value='0,1,2,3,4'}
 function renderSchedules(){$('scheduleList').innerHTML=STATE.schedules.length?STATE.schedules.map(s=>'<div class="item"><div><div class="item-title">'+esc(s.title)+'</div><div class="item-sub">'+esc(s.time)+' • '+esc(s.days.join(', '))+' • '+esc(s.command_id)+'</div></div><button class="btn danger" onclick="delSch(\''+esc(s.id)+'\')">Delete</button></div>').join(''):'<div class="empty">No schedules yet.</div>'}
 async function delSch(id){await api('/api/schedules/'+encodeURIComponent(id),{method:'DELETE'});toast('Removed');await reloadAll()}
-async function runAgent(path){try{const r=await fetch('http://127.0.0.1:8765'+path,{method:'POST',headers:{'X-Agent-Token':prompt('Agent token')}});if(!r.ok)throw new Error(await r.text());toast('Done')}catch(e){toast('Action failed')}}
+async function runAgent(action){try{const r=await api('/api/action/'+action,{method:'POST'});toast(r.success?'Done':'Action completed')}catch(e){toast('Action failed')}}
 async function runNamed(id){const c=STATE.commands.find(x=>x.id===id);if(c)await runCmd(id);else toast('Command not installed')}
 $('command_file').addEventListener('change',async e=>{const f=e.target.files[0];if(!f)return;try{await api('/api/commands',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:await f.text()})});toast('Imported');await reloadAll()}catch(err){toast(err.message)}e.target.value=''})
 reloadAll();
@@ -184,6 +186,20 @@ def add_schedule(payload: SchedulePayload):
     return item
 
 @app.delete('/api/schedules/{schedule_id}')
+@app.post('/api/action/{action}')
+def action(action: str):
+    if action == "status":
+        return get_status()
+    if action == "lock":
+        return lock_pc()
+    if action == "unlock":
+        return unlock_configured()
+    if action == "shutdown":
+        return shutdown_pc()
+    raise HTTPException(404, "Unknown action")
+
+
 def remove_schedule(schedule_id: str):
     if not delete_schedule(schedule_id): raise HTTPException(404, 'Schedule not found')
     return {'ok': True}
+
