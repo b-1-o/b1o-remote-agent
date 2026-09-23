@@ -205,8 +205,10 @@ def open_schoology_session() -> None:
         try:
             login_schoology(page, settings)
             page.bring_to_front()
-            while True:
-                time.sleep(60)
+
+            # End the automation session when the user closes its browser window.
+            while context.pages:
+                time.sleep(1)
         finally:
             try:
                 context.close()
@@ -238,8 +240,9 @@ def open_school_session() -> None:
                 else:
                     zoom_page.bring_to_front()
 
-            while True:
-                time.sleep(60)
+            # Keep School Mode alive only while at least one automation tab exists.
+            while context.pages:
+                time.sleep(1)
         finally:
             try:
                 context.close()
