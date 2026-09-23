@@ -1,0 +1,55 @@
+# b1o Remote
+
+Personal remote-control system for a CachyOS desktop.
+
+## Features
+
+- authenticated local FastAPI agent
+- PC status
+- open a fixed Zoom Web URL
+- lock the PC
+- shutdown the PC
+- Telegram inline-button control
+- systemd user services
+
+## Architecture
+
+Phone -> Telegram -> bot -> local agent -> CachyOS
+
+The agent never exposes arbitrary shell execution.
+
+## Setup
+
+1. Create the virtual environment.
+2. Install requirements.
+3. Copy .env.example to .env.
+4. Generate a token with: openssl rand -hex 32
+5. Set B1O_REMOTE_TOKEN.
+6. Set B1O_ZOOM_URL to your fixed Zoom Web link.
+7. Create a Telegram bot with BotFather.
+8. Set B1O_TELEGRAM_TOKEN.
+9. Set B1O_TELEGRAM_CHAT_ID to your own chat ID.
+
+Run the agent with:
+python -m uvicorn agent.main:app --host 127.0.0.1 --port 8765
+
+Run the bot with:
+python -m bot.bot
+
+For systemd:
+mkdir -p ~/.config/systemd/user
+cp systemd/b1o-remote-agent.service ~/.config/systemd/user/
+cp systemd/b1o-remote-bot.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now b1o-remote-agent.service
+systemctl --user enable --now b1o-remote-bot.service
+
+## Security
+
+Never commit .env.
+Never add arbitrary shell execution to the remote API.
+The Telegram bot accepts commands only from the configured chat ID.
+
+## Next
+
+Wake-on-LAN needs a controller that remains online while the PC is powered off. The next implementation can add WOL plus an external controller or another always-on device.
