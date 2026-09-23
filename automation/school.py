@@ -203,49 +203,51 @@ def wait_until(hour: int, minute: int) -> None:
     time.sleep((target - now).total_seconds())
 
 
-def should_run_today(settings: dict) -> bool:
-    now = datetime.now()
-    if not settings.get("school_enabled", True):
-        return False
-
-    if now.weekday() not in settings.get("school_days", [0, 1, 2, 3, 4]):
-        return False
-
-    return True
-
+def should_run_today(settings: dict, now: datetime) -> bool:
+    return (
+        bool(settings.get("school_enabled", True))
+        and now.weekday() in settings.get("school_days", [0, 1, 2, 3, 4])
+    )
 
 def time_matches(value: str, now: datetime) -> bool:
-    try:
-        hour, minute = (int(part) for part in value.split(":", 1))
-    except (ValueError, TypeError):
-        return False
-
+    try: hour, minute = (int(part) for part in value.split(":", 1))
+    except (ValueError, TypeError): return False
     return now.hour == hour and now.minute == minute
 
-
 def scheduler_loop() -> None:
-    last_school_date: str | None = None
+    from commands_store import load_commands
+    from runner import execute_command_sync
+    from schedule_store import load_schedules
+    import threading
+
+    fired: set[tuple[str, str]] = set()
+    school_started: set[str] = set()
 
     while True:
-        settings = load_settings()
         now = datetime.now()
+        day = now.date().isoformat()
+        settings = load_settings()
 
-        if should_run_today(settings):
-            today = now.date().isoformat()
+        if should_run_today(settings, now) and time_matches(settings["school_time"], now) and day not in school_started:
+            school_started.add(day)
+            threading.Thread(target=open_school_session, daemon=True).start()
 
-            if last_school_date != today and time_matches(
-                settings["school_time"], now
-            ):
-                last_school_date = today
-
-                try:
-                    open_school_session()
-                except Exception as exc:
-                    print(f"School Mode error: {type(exc).__name__}: {exc}")
+        commands = {x["id"]: x for x in load_commands()}
+        for schedule in load_schedules():
+            if not schedule["enabled"]: continue
+            key = (day, schedule["id"])
+            if now.weekday() not in schedule["days"]: continue
+            if not time_matches(schedule["time"], now): continue
+            if key in fired: continue
+            command = commands.get(schedule["command_id"])
+            if command is None: continue
+            fired.add(key)
+            try:
+                threading.Thread(target=execute_command_sync, args=(command,), daemon=True).start()
+            except Exception as exc:
+                print(f"Schedule error: {type(exc).__name__}: {exc}")
 
         time.sleep(20)
-
-
 def main() -> None:
     scheduler_loop()
 
