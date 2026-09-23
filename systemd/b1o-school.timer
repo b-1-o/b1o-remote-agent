@@ -1,0 +1,10 @@
+[Unit]
+Description=Start b1o School Mode on weekdays
+
+[Timer]
+OnCalendar=Mon..Fri 08:20:00
+Persistent=true
+Unit=b1o-school.service
+
+[Install]
+WantedBy=timers.target
