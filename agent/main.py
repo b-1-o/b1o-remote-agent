@@ -64,7 +64,10 @@ def close_browser(slot: str, x_agent_token: str | None = Header(default=None)):
 @app.post("/open-zoom")
 def open_zoom_endpoint(x_agent_token: str | None = Header(default=None)):
     authenticate(x_agent_token)
-    return open_zoom("zoom")
+    try:
+        return open_zoom("zoom")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Zoom: {type(exc).__name__}: {exc}") from exc
 
 
 @app.post("/open-schoology")
@@ -82,7 +85,10 @@ def login_schoology_endpoint(x_agent_token: str | None = Header(default=None)):
 @app.post("/school/start")
 def start_school_endpoint(x_agent_token: str | None = Header(default=None)):
     authenticate(x_agent_token)
-    return start_school_mode()
+    try:
+        return start_school_mode()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"School Mode: {type(exc).__name__}: {exc}") from exc
 
 
 @app.post("/run-command")
