@@ -159,12 +159,9 @@ class BrowserManager:
     def _start_browser(self) -> None:
         settings = load_settings()
         executable = _browser_path(settings)
-        profile = Path(
-            str(settings.get(
-                "browser_profile",
-                "~/.local/share/b1o-remote/browser",
-            ))
-        ).expanduser()
+        # The managed browser owns a dedicated Brave profile so it never
+        # collides with the user's normal Brave profile.
+        profile = Path("~/.local/share/b1o-remote/control-browser").expanduser()
         profile.mkdir(parents=True, exist_ok=True)
 
         self._context = self._pw.chromium.launch_persistent_context(
@@ -346,7 +343,7 @@ class BrowserManager:
                 "ENTER": "Enter",
                 "ESC": "Escape",
                 "TAB": "Tab",
-                "SPACE": " ",
+                "SPACE": "Space",
                 "BACKSPACE": "Backspace",
                 "LEFT": "ArrowLeft",
                 "RIGHT": "ArrowRight",
