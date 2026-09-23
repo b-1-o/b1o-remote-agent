@@ -274,6 +274,22 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     value = update.message.text or ""
     await delete_message(update.message)
 
+    if pending == "browser_url":
+        try:
+            await agent_request("POST", "/open-url", {"url": value})
+            await replace_panel(update, context, "✅ URL opened in Brave.", browser_keyboard())
+        except Exception as exc:
+            await replace_panel(update, context, f"❌ Open failed: {type(exc).__name__}", browser_keyboard())
+        return
+
+    if pending == "type_text":
+        try:
+            await agent_request("POST", "/input/type", {"text": value})
+            await replace_panel(update, context, "✅ Text sent.", keyboard_keyboard())
+        except Exception as exc:
+            await replace_panel(update, context, f"❌ Type failed: {type(exc).__name__}", keyboard_keyboard())
+        return
+
     if pending == "unlock_password":
         try:
             result = await agent_request(
