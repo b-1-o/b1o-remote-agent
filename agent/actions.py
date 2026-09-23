@@ -1,5 +1,9 @@
 import subprocess
-from .config import ZOOM_URL
+from pathlib import Path
+
+from config_store import load_settings
+from .config import AGENT_TOKEN
+
 
 def _spawn(command: list[str]) -> None:
     subprocess.Popen(
@@ -9,31 +13,70 @@ def _spawn(command: list[str]) -> None:
         start_new_session=True,
     )
 
+
+def _browser_command(url: str) -> list[str]:
+    settings = load_settings()
+    browser = str(settings.get("browser", "/usr/bin/brave")).strip()
+    profile = str(settings.get(
+        "browser_profile",
+        "~/.local/share/b1o-remote/browser",
+    )).strip()
+    profile = str(Path(profile).expanduser())
+    return [
+        browser,
+        "--new-tab",
+        f"--user-data-dir={profile}",
+        url,
+    ]
+
+
 def get_status() -> dict:
     hostname = subprocess.check_output(["hostname"], text=True).strip()
     return {"online": True, "hostname": hostname}
 
+
+def open_url(url: str) -> dict:
+    if not (url.startswith("https://") or url.startswith("http://")):
+        raise ValueError("Only http/https URLs are allowed")
+    _spawn(_browser_command(url))
+    return {"success": True, "action": "open_url"}
+
+
 def open_zoom() -> dict:
-    _spawn(["xdg-open", ZOOM_URL])
-    return {"success": True, "action": "open_zoom"}
+    settings = load_settings()
+    url = str(settings.get("zoom_url", "")).strip()
+    if not url:
+        raise RuntimeError("Zoom URL is not configured")
+    return open_url(url)
+
+
+def open_schoology() -> dict:
+    settings = load_settings()
+    url = str(settings.get("schoology_url", "")).strip()
+    if not url:
+        raise RuntimeError("Schoology URL is not configured")
+    return open_url(url)
+
 
 def lock_pc() -> dict:
     _spawn(["loginctl", "lock-session"])
     return {"success": True, "action": "lock"}
 
+
 def shutdown_pc() -> dict:
     _spawn(["systemctl", "poweroff"])
     return {"success": True, "action": "shutdown"}
 
+
 def unlock_session() -> dict:
     username = subprocess.check_output(["id", "-un"], text=True).strip()
-
     sessions = subprocess.check_output(
         ["loginctl", "list-sessions", "--no-legend"],
         text=True,
     ).splitlines()
 
     unlocked = []
+
     for line in sessions:
         parts = line.split()
         if len(parts) < 3 or parts[2] != username:
@@ -53,5 +96,4 @@ def unlock_session() -> dict:
         "success": bool(unlocked),
         "action": "unlock",
         "sessions": unlocked,
-        "note": "Targets only an existing user session; the OS login password is not transmitted.",
     }
