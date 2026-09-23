@@ -335,29 +335,37 @@ class BrowserManager:
         page,
         media: str,
     ) -> bool:
-        # The Zoom Web App pre-join preview uses icon buttons whose visible
-        # text can be only "Video"/"Audio"; the useful state is usually in
-        # aria-label/title. Inspect every visible button instead of relying on
-        # one exact accessible name.
+        # Zoom's pre-join controls in the user's UI are the two buttons inside
+        # the video preview. In Russian they expose labels such as:
+        # "Выключить звук" / "Включить звук" and
+        # "Выключить видео" / "Включить видео".
         media = media.lower()
+
         if media == "video":
-            active_phrases = (
-                "stop my video",
-                "stop video",
+            on_labels = (
+                "выключить видео",
+                "выключить видео для всех",
                 "turn off my video",
                 "turn off video",
+                "stop video",
+                "stop my video",
                 "video on",
             )
-            inactive_phrases = (
-                "start my video",
-                "start video",
+            off_labels = (
+                "включить видео",
+                "включить мое видео",
                 "turn on my video",
                 "turn on video",
+                "start video",
+                "start my video",
                 "video off",
                 "camera off",
             )
         else:
-            active_phrases = (
+            on_labels = (
+                "выключить звук",
+                "выключить микрофон",
+                "выключить аудио",
                 "mute my microphone",
                 "mute microphone",
                 "mute my audio",
@@ -365,7 +373,10 @@ class BrowserManager:
                 "microphone on",
                 "audio on",
             )
-            inactive_phrases = (
+            off_labels = (
+                "включить звук",
+                "включить микрофон",
+                "включить аудио",
                 "unmute my microphone",
                 "unmute microphone",
                 "unmute my audio",
@@ -374,83 +385,93 @@ class BrowserManager:
                 "audio off",
             )
 
+        def normalize(value: str) -> str:
+            return " ".join(value.lower().split())
+
+        def collect_text(node) -> str:
+            values = [
+                node.get_attribute("aria-label") or "",
+                node.get_attribute("title") or "",
+                node.get_attribute("data-testid") or "",
+                node.inner_text() or "",
+            ]
+            return normalize(" | ".join(v for v in values if v))
+
+        # First: exact buttons in the preview. Use the outer button so the
+        # actual Zoom click handler receives the event.
         buttons = page.locator("button, [role='button']")
         try:
             count = buttons.count()
         except Exception:
-            return False
+            count = 0
 
-        for index in range(min(count, 120)):
+        for index in range(min(count, 150)):
             try:
                 button = buttons.nth(index)
                 if not button.is_visible():
                     continue
 
-                aria = (button.get_attribute("aria-label") or "").strip().lower()
-                title = (button.get_attribute("title") or "").strip().lower()
-                text = (button.inner_text() or "").strip().lower()
-                data_test = (button.get_attribute("data-testid") or "").strip().lower()
-                combined = " | ".join(
-                    value for value in (aria, title, text, data_test) if value
-                )
-
+                combined = collect_text(button)
                 if not combined:
                     continue
 
-                # Never touch a control that already represents the OFF state.
-                if any(phrase in combined for phrase in inactive_phrases):
+                # Already OFF: never click it, because that would turn media on.
+                if any(label in combined for label in off_labels):
                     continue
 
-                # The button must clearly describe an active media control.
-                if not any(phrase in combined for phrase in active_phrases):
-                    continue
+                if any(label in combined for label in on_labels):
+                    button.click(force=True, timeout=2500)
+                    page.wait_for_timeout(350)
 
-                # Click the actual button. If Playwright's DOM click does
-                # not trigger Zoom's handler, fall back to a real mouse click.
-                button.click(force=True, timeout=2000)
-                return True
+                    # Verify that the same control changed to an OFF label.
+                    try:
+                        after = collect_text(button)
+                        if any(label in after for label in off_labels):
+                            return True
+                    except Exception:
+                        return True
             except Exception:
                 continue
 
-        # Fallback: inspect labelled elements and click their closest button.
-        try:
-            result = page.evaluate(
-                """({media, active, inactive}) => {
-                    const nodes = Array.from(
-                        document.querySelectorAll(
-                            'button,[role="button"],[aria-label],[title]'
+        # Second: exact Russian/English visible text, then walk up to the
+        # nearest button. This handles nested <span> labels inside Zoom buttons.
+        for pattern in on_labels:
+            try:
+                node = page.get_by_text(
+                    re.compile(r"^" + re.escape(pattern) + r"$", re.I)
+                )
+                count = node.count()
+                for index in range(min(count, 10)):
+                    item = node.nth(index)
+                    if not item.is_visible():
+                        continue
+
+                    button = item.locator("xpath=ancestor::button[1]")
+                    if not button.count():
+                        button = item.locator(
+                            "xpath=ancestor::*[@role='button'][1]"
                         )
-                    );
-                    for (const node of nodes) {
-                        const text = [
-                            node.getAttribute('aria-label') || '',
-                            node.getAttribute('title') || '',
-                            node.textContent || '',
-                            node.getAttribute('data-testid') || ''
-                        ].join(' ').toLowerCase();
 
-                        if (!text.trim()) continue;
-                        if (inactive.some(x => text.includes(x))) continue;
-                        if (!active.some(x => text.includes(x))) continue;
+                    if not button.count():
+                        continue
 
-                        const button =
-                            node.closest('button,[role="button"]') || node;
-                        if (button && typeof button.click === 'function') {
-                            button.click();
-                            return true;
-                        }
-                    }
-                    return false;
-                }""",
-                {
-                    "media": media,
-                    "active": list(active_phrases),
-                    "inactive": list(inactive_phrases),
-                },
-            )
-            return bool(result)
-        except Exception:
-            return False
+                    target = button.first
+                    if not target.is_visible():
+                        continue
+
+                    target.click(force=True, timeout=2500)
+                    page.wait_for_timeout(350)
+
+                    try:
+                        after = collect_text(target)
+                        if any(label in after for label in off_labels):
+                            return True
+                    except Exception:
+                        return True
+            except Exception:
+                continue
+
+        return False
 
     def _turn_zoom_toggle_off(
         self,
