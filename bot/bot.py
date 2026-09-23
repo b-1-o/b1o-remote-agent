@@ -15,6 +15,8 @@ AGENT_TOKEN = os.getenv("B1O_REMOTE_TOKEN", "")
 TELEGRAM_TOKEN = os.getenv("B1O_TELEGRAM_TOKEN", "")
 ALLOWED_CHAT_ID = os.getenv("B1O_TELEGRAM_CHAT_ID", "")
 PANEL_KEY = "panel_id"
+PANEL_HISTORY_KEY = "panel_history"
+MAX_PANEL_HISTORY = 8
 
 def allowed(update: Update) -> bool:
     return bool(ALLOWED_CHAT_ID) and update.effective_chat is not None and str(update.effective_chat.id) == ALLOWED_CHAT_ID
@@ -68,21 +70,52 @@ def home_text() -> str:
     s=load_settings()
     return f"<b>b1o Remote</b>\n\nSchool Mode: <b>{'ON' if s['school_enabled'] else 'OFF'}</b>\nSchedule: <b>{html.escape(s['school_time'])}</b>\nZoom: <b>{html.escape(s['zoom_time'])}</b>"
 
+async def _delete_old_panels(context: ContextTypes.DEFAULT_TYPE, chat_id: int, keep_id: int | None = None) -> None:
+    history = list(context.chat_data.get(PANEL_HISTORY_KEY, []))
+    keep: list[int] = []
+    for message_id in history:
+        if keep_id is not None and message_id == keep_id:
+            keep.append(message_id)
+            continue
+        try:
+            await context.bot.delete_message(chat_id, message_id)
+        except Exception:
+            pass
+    context.chat_data[PANEL_HISTORY_KEY] = keep
+
 async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, keyboard: InlineKeyboardMarkup):
     q=update.callback_query
+    chat_id=update.effective_chat.id
+
     if q:
         try:
-            await q.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
-            context.chat_data[PANEL_KEY]=q.message.message_id
+            message_id = q.message.message_id
+            await q.message.edit_text(
+                text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard,
+            )
+            context.chat_data[PANEL_KEY] = message_id
+            history = list(context.chat_data.get(PANEL_HISTORY_KEY, []))
+            if message_id not in history:
+                history.append(message_id)
+            context.chat_data[PANEL_HISTORY_KEY] = history[-MAX_PANEL_HISTORY:]
+            await _delete_old_panels(context, chat_id, keep_id=message_id)
             return
-        except Exception: pass
-    chat_id=update.effective_chat.id
-    old=context.chat_data.get(PANEL_KEY)
-    if old:
-        try: await context.bot.delete_message(chat_id, old)
-        except Exception: pass
-    m=await context.bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+        except Exception:
+            pass
+
+    old = context.chat_data.get(PANEL_KEY)
+    await _delete_old_panels(context, chat_id, keep_id=None)
+
+    m=await context.bot.send_message(
+        chat_id,
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=keyboard,
+    )
     context.chat_data[PANEL_KEY]=m.message_id
+    context.chat_data[PANEL_HISTORY_KEY]=[m.message_id]
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update): await delete_message(update.message); return
@@ -90,6 +123,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await panel(update, context, home_text(), home_keyboard())
 
 async def text_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await delete_message(update.message)
+
+async def command_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await delete_message(update.message)
 
 
@@ -185,6 +221,7 @@ def main() -> None:
     app=Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler('start',start))
     app.add_handler(CallbackQueryHandler(button))
+    app.add_handler(MessageHandler(filters.COMMAND, command_fallback))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, text_fallback))
     app.run_polling()
 
