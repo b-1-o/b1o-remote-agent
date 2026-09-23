@@ -23,6 +23,8 @@ AGENT_URL = os.getenv("B1O_AGENT_URL", "http://127.0.0.1:8765")
 AGENT_TOKEN = os.getenv("B1O_REMOTE_TOKEN", "")
 TELEGRAM_TOKEN = os.getenv("B1O_TELEGRAM_TOKEN", "")
 ALLOWED_CHAT_ID = os.getenv("B1O_TELEGRAM_CHAT_ID", "")
+WOL_RELAY_URL = os.getenv("B1O_WOL_RELAY_URL", "").rstrip("/")
+WOL_RELAY_TOKEN = os.getenv("B1O_WOL_RELAY_TOKEN", "")
 
 PENDING_KEY = "pending_setting"
 
@@ -48,6 +50,7 @@ async def agent_request(method: str, path: str) -> dict:
 
 def main_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⚡ WAKE PC", callback_data="wake")],
         [InlineKeyboardButton("🎓 SCHOOL MODE", callback_data="school")],
         [InlineKeyboardButton("⚙️ SETTINGS", callback_data="settings")],
         [InlineKeyboardButton("📊 STATUS", callback_data="status")],
@@ -243,6 +246,27 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data or ""
 
     try:
+        if data == "wake":
+            if not WOL_RELAY_URL or not WOL_RELAY_TOKEN:
+                await query.edit_message_text(
+                    "⚡ Wake relay is not configured yet.",
+                    reply_markup=main_keyboard(),
+                )
+                return
+
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.post(
+                    f"{WOL_RELAY_URL}/wake",
+                    headers={"X-Relay-Token": WOL_RELAY_TOKEN},
+                )
+                response.raise_for_status()
+
+            await query.edit_message_text(
+                "⚡ Wake packet sent. Waiting for PC...",
+                reply_markup=main_keyboard(),
+            )
+            return
+
         if data in {"school", "view_settings"}:
             await query.edit_message_text(
                 school_text(),
