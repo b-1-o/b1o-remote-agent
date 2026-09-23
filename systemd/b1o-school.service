@@ -1,0 +1,15 @@
+[Unit]
+Description=b1o School Mode
+After=graphical-session.target
+Wants=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Загрузки/b1o-remote-agent
+EnvironmentFile=%h/Загрузки/b1o-remote-agent/.env
+ExecStart=%h/Загрузки/b1o-remote-agent/.venv/bin/python -m automation.school
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
