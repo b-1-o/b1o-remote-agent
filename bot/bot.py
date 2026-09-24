@@ -55,6 +55,7 @@ def school_keyboard() -> InlineKeyboardMarkup:
     s=load_settings(); state="🟢 ON" if s['school_enabled'] else "🔴 OFF"
     return InlineKeyboardMarkup([[InlineKeyboardButton(f"School Mode {state}", callback_data="toggle_school")],
         [InlineKeyboardButton("🎥 Zoom", callback_data="zoom"), InlineKeyboardButton("🏫 LAUSD", callback_data="lausd")],
+        [InlineKeyboardButton("✖ Close Conference", callback_data="zoom_close")],
         [InlineKeyboardButton("▶️ Run scheduled School Mode", callback_data="run_school")],
         [InlineKeyboardButton("⬅️ Home", callback_data="home")]])
 
@@ -201,6 +202,9 @@ def zoom_chat_keyboard(live: bool = False) -> InlineKeyboardMarkup:
                 "🟢 Live" if live else "⚪ Live",
                 callback_data="zoom_chat_live",
             ),
+        ],
+        [
+            InlineKeyboardButton("✖ Close Conference", callback_data="zoom_close"),
         ],
         [
             InlineKeyboardButton("🌫 Browser", callback_data="browser"),
@@ -683,6 +687,20 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 update,
                 context,
                 "✖️ <b>Zoom cancelled</b>",
+                school_keyboard(),
+            )
+            return
+        if data=="zoom_close":
+            await stop_zoom_chat_live(context)
+            await agent('POST', '/zoom/close')
+            try:
+                await q.message.delete()
+            except Exception:
+                pass
+            await panel(
+                update,
+                context,
+                "✖️ <b>Conference closed</b>",
                 school_keyboard(),
             )
             return
