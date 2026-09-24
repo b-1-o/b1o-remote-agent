@@ -401,6 +401,46 @@ class BrowserManager:
             "audio on",
         )
 
+    def _zoom_button_state_text(self, button) -> str:
+        values = []
+        for attr in (
+            "aria-label",
+            "title",
+            "data-testid",
+            "data-state",
+            "aria-pressed",
+            "aria-checked",
+            "class",
+        ):
+            try:
+                value = button.get_attribute(attr)
+            except Exception:
+                value = None
+            if value:
+                values.append(value)
+
+        for selector in ("svg", "[class*='icon' i]"):
+            try:
+                count = button.locator(selector).count()
+                for index in range(min(count, 4)):
+                    node = button.locator(selector).nth(index)
+                    for attr in ("class", "data-testid", "aria-label", "title"):
+                        value = node.get_attribute(attr)
+                        if value:
+                            values.append(value)
+            except Exception:
+                pass
+
+        try:
+            text = button.inner_text()
+            if text:
+                values.append(text)
+        except Exception:
+            pass
+
+        return " | ".join(" ".join(str(v).lower().split()) for v in values if v)
+
+
     def _zoom_media_row(self, page):
         """Find the compact microphone/camera buttons in Zoom pre-join."""
         buttons = page.locator("button, [role='button']")
