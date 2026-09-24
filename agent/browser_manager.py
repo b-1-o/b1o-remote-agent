@@ -1460,6 +1460,46 @@ class BrowserManager:
             )
             password_field = _visible_input(page, 'input[type="password"]')
 
+            # If LAUSD does not present a credential form at all, treat the
+            # navigation as already authenticated/complete. This covers the
+            # normal remembered-session case where lms.lausd.net stays on its
+            # landing page instead of asking for MyMail credentials again.
+            if username_field is None and password_field is None:
+                current_url = page.url
+                try:
+                    body_text = " ".join((page.locator("body").inner_text() or "").split()).lower()
+                except Exception:
+                    body_text = ""
+
+                microsoft_login = (
+                    "login.microsoftonline.com" in current_url.lower()
+                    or "login.live.com" in current_url.lower()
+                    or "signon.lausd.net" in current_url.lower()
+                )
+                asks_for_credentials = any(
+                    marker in body_text
+                    for marker in (
+                        "email",
+                        "password",
+                        "sign in",
+                        "login",
+                        "mymail",
+                    )
+                )
+
+                if not microsoft_login and not asks_for_credentials:
+                    page.bring_to_front()
+                    return {
+                        "success": True,
+                        "action": "schoology_login",
+                        "slot": slot,
+                        "already_logged_in": True,
+                        "login_completed": True,
+                        "url": current_url,
+                        "credentials_skipped": True,
+                        "credential_form_present": False,
+                    }
+
             # Some LAUSD SSO flows show the username first and password second.
             if username_field is not None:
                 try:
