@@ -1190,7 +1190,14 @@ class BrowserManager:
             return False
 
         def _submit_sign_in(page, password_field) -> None:
-            sign_in = self._first_visible([
+            # Microsoft Entra commonly uses #idSIButton9 for the final
+            # "Sign in" action. Prefer that concrete control, then fall back
+            # to accessible/button selectors. Some builds do not navigate
+            # immediately after click, so verify and retry with Enter.
+            selectors = [
+                page.locator("#idSIButton9"),
+                page.locator('input[type="submit"][value*="Sign in" i]'),
+                page.locator('button[type="submit"]'),
                 page.get_by_role(
                     "button",
                     name=re.compile(r"^(sign in|next|continue|login)$", re.I),
@@ -1199,17 +1206,52 @@ class BrowserManager:
                     "link",
                     name=re.compile(r"^(sign in|next|continue|login)$", re.I),
                 ),
-                page.locator(
-                    'input[type="submit"], '
-                    'button[type="submit"], '
-                    'input[value*="sign in" i], '
-                    'input[value*="login" i]'
-                ),
-            ])
-            if sign_in is not None:
-                sign_in.click(force=True, timeout=5000)
-            else:
-                password_field.press("Enter")
+            ]
+
+            clicked = False
+            for candidate in selectors:
+                try:
+                    count = candidate.count()
+                except Exception:
+                    count = 0
+                if not count:
+                    continue
+
+                for index in range(min(count, 5)):
+                    try:
+                        button = candidate.nth(index)
+                        if not button.is_visible():
+                            continue
+                        button.scroll_into_view_if_needed()
+                        button.click(force=True, timeout=5000)
+                        clicked = True
+                        page.wait_for_timeout(1200)
+                        break
+                    except Exception:
+                        continue
+
+                if clicked:
+                    break
+
+            # A keyboard submit is the most reliable fallback for Microsoft
+            # password forms if the visual button swallowed the click.
+            if not clicked:
+                try:
+                    password_field.press("Enter")
+                    page.wait_for_timeout(1500)
+                except Exception:
+                    pass
+                return
+
+            # If Microsoft did not leave the password page after the click,
+            # explicitly submit with Enter once.
+            try:
+                current = (page.url or "").lower()
+                if "login.microsoftonline.com" in current:
+                    password_field.press("Enter")
+                    page.wait_for_timeout(1800)
+            except Exception:
+                pass
 
         def _finish_saml_handoff(page) -> None:
             """Wait for the Microsoft -> LAUSD SAML POST to finish.
@@ -1376,6 +1418,7 @@ class BrowserManager:
                 )
 
             password_field.fill(password)
+            page.wait_for_timeout(250)
             _submit_sign_in(page, password_field)
             _finish_saml_handoff(page)
 
