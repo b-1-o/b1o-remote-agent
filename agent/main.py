@@ -12,6 +12,7 @@ from .actions import (
     open_url,
     open_zoom,
     join_zoom,
+    cancel_zoom,
     start_zoom_async,
     zoom_state,
     run_command,
@@ -94,6 +95,18 @@ def join_zoom_endpoint(x_agent_token: str | None = Header(default=None)):
         raise HTTPException(
             status_code=400,
             detail=f"Zoom join: {type(exc).__name__}: {exc}",
+        ) from exc
+
+
+@app.post("/zoom/cancel")
+def zoom_cancel_endpoint(x_agent_token: str | None = Header(default=None)):
+    authenticate(x_agent_token)
+    try:
+        return cancel_zoom("zoom")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Zoom cancel: {type(exc).__name__}: {exc}",
         ) from exc
 
 
