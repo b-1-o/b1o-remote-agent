@@ -119,7 +119,13 @@ def open_schoology_endpoint(x_agent_token: str | None = Header(default=None)):
 @app.post("/open-schoology-login")
 def login_schoology_endpoint(x_agent_token: str | None = Header(default=None)):
     authenticate(x_agent_token)
-    return login_schoology("lausd")
+    try:
+        return login_schoology("lausd")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"LAUSD: {type(exc).__name__}: {exc}",
+        ) from exc
 
 
 @app.post("/school/start")
