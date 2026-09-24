@@ -1380,6 +1380,22 @@ class BrowserManager:
         def job() -> dict:
             page = self._new_page(slot)
             page.bring_to_front()
+
+            # IMPORTANT: keep the existing authenticated LAUSD page. The first
+            # login creates the Schoology session, and subsequent presses of
+            # LAUSD must not navigate back to the public entry page.
+            current_before = (page.url or "").rstrip("/")
+            if current_before.lower() == "https://lms.lausd.net/home".lower():
+                return {
+                    "success": True,
+                    "action": "schoology_login",
+                    "slot": slot,
+                    "already_logged_in": True,
+                    "login_completed": True,
+                    "url": page.url,
+                    "credentials_skipped": True,
+                }
+
             page.goto(
                 login_url,
                 wait_until="domcontentloaded",
@@ -1387,9 +1403,9 @@ class BrowserManager:
             )
             page.wait_for_timeout(2200)
 
-            # When the configured LAUSD entry point is already /home, or the
-            # initial redirect lands on /home because a session is remembered,
-            # authentication is already satisfied. Never ask for credentials.
+            # When the configured LAUSD entry point is /home, or the redirect
+            # lands on /home because the session is remembered, authentication
+            # is already satisfied. Never ask for credentials in that case.
             normalized_config = login_url.rstrip("/")
             normalized_current = (page.url or "").rstrip("/")
             if normalized_config.lower() == "https://lms.lausd.net/home".lower():
