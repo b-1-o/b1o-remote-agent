@@ -1093,40 +1093,18 @@ class BrowserManager:
         settings = load_settings()
         user = str(settings.get("schoology_user", "")).strip()
         password = str(settings.get("schoology_password", ""))
-        login_url = str(settings.get("schoology_url", "")).strip()
+        login_url = str(settings.get("schoology_url", "")).strip() or "https://lms.lausd.net"
 
         if not user or not password:
             raise RuntimeError("Schoology credentials are not configured in Admin.")
-        if not login_url:
-            login_url = "https://lms.lausd.net"
 
-        # Normalize the retired Azure-hosted entry point to the current LAUSD
-        # student LMS entry point.
-        if "lausdschoology.azurewebsites.net" in login_url:
-            login_url = "https://lms.lausd.net"
-
-        def click_student_entry(page) -> bool:
-            candidates = [
-                page.get_by_role("link", name=re.compile(r"^student$", re.I)),
-                page.get_by_role("button", name=re.compile(r"^student$", re.I)),
-                page.get_by_text(re.compile(r"^student$", re.I)),
-            ]
-            node = self._first_visible(candidates)
-            if node is None:
-                return False
-            try:
-                node.click()
-                page.wait_for_timeout(1500)
-                return True
-            except Exception:
-                return False
-
-        def find_visible(locator):
+        def _visible_input(page, selector: str):
+            locator = page.locator(selector)
             try:
                 count = locator.count()
             except Exception:
                 return None
-            for index in range(min(count, 10)):
+            for index in range(min(count, 20)):
                 try:
                     item = locator.nth(index)
                     if item.is_visible():
@@ -1135,108 +1113,215 @@ class BrowserManager:
                     continue
             return None
 
+        def _click_student_option(page) -> bool:
+            # LAUSD's current LMS page is a branded picker. The Student/Employees
+            # choices are often image cards, so get_by_text("Students") is not
+            # reliable enough by itself.
+            direct = [
+                page.get_by_role("link", name=re.compile(r"student", re.I)),
+                page.get_by_role("button", name=re.compile(r"student", re.I)),
+                page.get_by_text(re.compile(r"^students?$", re.I)),
+                page.locator(
+                    'a[href*="student" i], '
+                    '[role="link"][aria-label*="student" i], '
+                    '[role="button"][aria-label*="student" i], '
+                    '[title*="student" i]'
+                ),
+            ]
+            node = self._first_visible(direct)
+            if node is not None:
+                try:
+                    node.click(force=True, timeout=5000)
+                    page.wait_for_timeout(1800)
+                    return True
+                except Exception:
+                    pass
+
+            # Image/card fallback: inspect each visible link for student text
+            # in href, accessible labels, text, title, or child image alt/src.
+            links = page.locator("a")
+            try:
+                count = links.count()
+            except Exception:
+                count = 0
+
+            for index in range(min(count, 80)):
+                try:
+                    link = links.nth(index)
+                    if not link.is_visible():
+                        continue
+
+                    values = []
+                    for attr in ("href", "aria-label", "title"):
+                        value = link.get_attribute(attr)
+                        if value:
+                            values.append(value)
+
+                    try:
+                        text = link.inner_text()
+                        if text:
+                            values.append(text)
+                    except Exception:
+                        pass
+
+                    images = link.locator("img")
+                    try:
+                        image_count = images.count()
+                    except Exception:
+                        image_count = 0
+
+                    for image_index in range(min(image_count, 5)):
+                        image = images.nth(image_index)
+                        for attr in ("alt", "title", "src"):
+                            value = image.get_attribute(attr)
+                            if value:
+                                values.append(value)
+
+                    combined = " ".join(values).lower()
+                    if "student" not in combined:
+                        continue
+
+                    link.click(force=True, timeout=5000)
+                    page.wait_for_timeout(1800)
+                    return True
+                except Exception:
+                    continue
+
+            return False
+
+        def _submit_sign_in(page, password_field) -> None:
+            sign_in = self._first_visible([
+                page.get_by_role(
+                    "button",
+                    name=re.compile(r"^(sign in|next|continue|login)$", re.I),
+                ),
+                page.get_by_role(
+                    "link",
+                    name=re.compile(r"^(sign in|next|continue|login)$", re.I),
+                ),
+                page.locator(
+                    'input[type="submit"], '
+                    'button[type="submit"], '
+                    'input[value*="sign in" i], '
+                    'input[value*="login" i]'
+                ),
+            ])
+            if sign_in is not None:
+                sign_in.click(force=True, timeout=5000)
+            else:
+                password_field.press("Enter")
+
         def job() -> dict:
             page = self._new_page(slot)
             page.bring_to_front()
-            page.goto(login_url, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(2000)
+            page.goto(
+                login_url,
+                wait_until="domcontentloaded",
+                timeout=30000,
+            )
+            page.wait_for_timeout(2200)
 
-            # The current LAUSD LMS flow starts at lms.lausd.net and asks the
-            # user to choose Student before showing the credential form.
+            # lms.lausd.net currently redirects to LAUSD's Schoology picker.
+            # Select the Students card before looking for credentials.
             current = (page.url or "").lower()
-            if "lms.lausd.net" in current:
-                click_student_entry(page)
+            picker_text = (page.locator("body").inner_text() or "").lower()
+            if "select an option" in picker_text or "students" in picker_text:
+                _click_student_option(page)
+                page.wait_for_timeout(1800)
 
-            # Give the login page a few seconds to render after the Student
-            # selection/redirect.
-            page.wait_for_timeout(1500)
-
-            password_locator = page.locator('input[type="password"]')
-            username_locator = page.locator(
+            username_field = _visible_input(
+                page,
                 'input[type="email"], '
                 'input[name*="user" i], '
                 'input[name*="email" i], '
                 'input[name="loginfmt"], '
                 'input[name="identifier"], '
-                'input[type="text"]'
+                'input[type="text"]',
             )
+            password_field = _visible_input(page, 'input[type="password"]')
 
-            password_field = find_visible(password_locator)
-            username_field = find_visible(username_locator)
-
-            # Microsoft/SSO may return a password-only page when the account
-            # tile was remembered.
-            if password_field is None and username_field is None:
-                # Handle an account tile/email step when LAUSD redirects to
-                # Microsoft SSO.
-                _click_account_tile(page, user)
-                page.wait_for_timeout(1200)
-                password_field = find_visible(password_locator)
-                username_field = find_visible(username_locator)
-
+            # Some LAUSD SSO flows show the username first and password second.
             if username_field is not None:
                 try:
                     current_user = str(username_field.input_value()).strip()
                 except Exception:
                     current_user = ""
+
                 if not current_user:
                     username_field.fill(user)
 
-                # Fill password on the same form when available.
-                password_field = find_visible(password_locator)
+                password_field = _visible_input(page, 'input[type="password"]')
                 if password_field is None:
                     next_button = self._first_visible([
-                        page.get_by_role("button", name=re.compile(r"^(next|sign in|continue)$", re.I)),
-                        page.get_by_role("link", name=re.compile(r"^(next|sign in|continue)$", re.I)),
+                        page.get_by_role(
+                            "button",
+                            name=re.compile(r"^(next|sign in|continue)$", re.I),
+                        ),
+                        page.get_by_role(
+                            "link",
+                            name=re.compile(r"^(next|sign in|continue)$", re.I),
+                        ),
+                        page.locator(
+                            'input[type="submit"], button[type="submit"]'
+                        ),
                     ])
                     if next_button is not None:
-                        next_button.click()
+                        next_button.click(force=True, timeout=5000)
                     else:
                         username_field.press("Enter")
+                    page.wait_for_timeout(1600)
+                    password_field = _visible_input(page, 'input[type="password"]')
+
+            # If the password page appears directly, fill it without touching
+            # the account-picker logic used by Microsoft pages.
+            if password_field is None:
+                # Microsoft can still present an account tile on some SSO
+                # sessions, so try the existing helper only as a last resort.
+                try:
+                    _click_account_tile(page, user)
                     page.wait_for_timeout(1200)
-                    password_field = find_visible(password_locator)
+                except Exception:
+                    pass
+                password_field = _visible_input(page, 'input[type="password"]')
 
             if password_field is None:
                 raise RuntimeError(
-                    f"LAUSD login password field was not found. URL={page.url}"
+                    "LAUSD Student login form was not found. "
+                    f"URL={page.url}"
                 )
 
             password_field.fill(password)
-
-            sign_in = self._first_visible([
-                page.get_by_role("button", name=re.compile(r"^(sign in|next|continue|login)$", re.I)),
-                page.get_by_role("link", name=re.compile(r"^(sign in|next|continue|login)$", re.I)),
-            ])
-            if sign_in is not None:
-                sign_in.click()
-            else:
-                password_field.press("Enter")
-
+            _submit_sign_in(page, password_field)
             page.wait_for_timeout(5000)
 
-            # Handle Microsoft's optional "Stay signed in?" step.
+            # Optional Microsoft/LAUSD "Stay signed in?" page.
             stay_yes = self._first_visible([
                 page.get_by_role("button", name=re.compile(r"^yes$", re.I)),
                 page.get_by_text(re.compile(r"^yes$", re.I)),
             ])
             if stay_yes is not None:
                 try:
-                    stay_yes.click()
+                    stay_yes.click(force=True, timeout=5000)
                     page.wait_for_timeout(3000)
                 except Exception:
                     pass
 
             page.bring_to_front()
             final_url = page.url
+            body_text = ""
+            try:
+                body_text = (page.locator("body").inner_text() or "").lower()
+            except Exception:
+                pass
 
-            # If the browser is still on a login/password page, return a useful
-            # diagnostic instead of reporting success prematurely.
             lowered = final_url.lower()
             still_login = (
                 "login.microsoftonline.com" in lowered
                 or "login.live.com" in lowered
-                or "/student/login" in lowered
+                or "signon.lausd.net" in lowered
+                or "student/login" in lowered
                 or lowered.rstrip("/").endswith("/login")
+                or "select an option" in body_text
             )
             if still_login:
                 raise RuntimeError(
