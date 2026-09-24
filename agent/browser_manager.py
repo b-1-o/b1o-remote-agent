@@ -1190,69 +1190,82 @@ class BrowserManager:
             return False
 
         def _submit_sign_in(page, password_field) -> None:
-            # Microsoft Entra commonly uses #idSIButton9 for the final
-            # "Sign in" action. Prefer that concrete control, then fall back
-            # to accessible/button selectors. Some builds do not navigate
-            # immediately after click, so verify and retry with Enter.
-            selectors = [
-                page.locator("#idSIButton9"),
-                page.locator('input[type="submit"][value*="Sign in" i]'),
-                page.locator('button[type="submit"]'),
-                page.get_by_role(
-                    "button",
-                    name=re.compile(r"^(sign in|next|continue|login)$", re.I),
-                ),
-                page.get_by_role(
-                    "link",
-                    name=re.compile(r"^(sign in|next|continue|login)$", re.I),
-                ),
+            # Microsoft Entra's student SSO form commonly uses #idSIButton9.
+            # Use several independent submission paths because some Web/Brave
+            # builds accept the password fill but swallow a normal Playwright
+            # click on the sign-in button.
+            button_selectors = [
+                '#idSIButton9',
+                'input[type="submit"][value*="Sign in" i]',
+                'button[type="submit"]',
             ]
 
-            clicked = False
-            for candidate in selectors:
+            def current_url() -> str:
                 try:
-                    count = candidate.count()
+                    return (page.url or "").lower()
                 except Exception:
-                    count = 0
-                if not count:
-                    continue
+                    return ""
 
-                for index in range(min(count, 5)):
-                    try:
-                        button = candidate.nth(index)
-                        if not button.is_visible():
-                            continue
-                        button.scroll_into_view_if_needed()
-                        button.click(force=True, timeout=5000)
-                        clicked = True
-                        page.wait_for_timeout(1200)
-                        break
-                    except Exception:
-                        continue
-
-                if clicked:
-                    break
-
-            # A keyboard submit is the most reliable fallback for Microsoft
-            # password forms if the visual button swallowed the click.
-            if not clicked:
-                try:
-                    password_field.press("Enter")
-                    page.wait_for_timeout(1500)
-                except Exception:
-                    pass
-                return
-
-            # If Microsoft did not leave the password page after the click,
-            # explicitly submit with Enter once.
+            # Give Microsoft a moment to enable the button after password fill.
             try:
-                current = (page.url or "").lower()
-                if "login.microsoftonline.com" in current:
-                    password_field.press("Enter")
-                    page.wait_for_timeout(1800)
+                page.wait_for_timeout(700)
             except Exception:
                 pass
 
+            # 1) Explicitly click the real Microsoft button.
+            clicked = False
+            for selector in button_selectors:
+                try:
+                    candidate = page.locator(selector)
+                    count = candidate.count()
+                    for index in range(min(count, 5)):
+                        button = candidate.nth(index)
+                        if not button.is_visible():
+                            continue
+
+                        for _ in range(10):
+                            disabled = (button.get_attribute("disabled") or "").lower()
+                            aria_disabled = (button.get_attribute("aria-disabled") or "").lower()
+                            if not disabled and aria_disabled != "true":
+                                break
+                            page.wait_for_timeout(300)
+
+                        button.scroll_into_view_if_needed()
+                        button.click(force=True, timeout=5000)
+                        clicked = True
+                        page.wait_for_timeout(1800)
+                        break
+                    if clicked:
+                        break
+                except Exception:
+                    continue
+
+            # 2) Always send Enter once after the explicit click attempt.
+            # This is intentional: in some Microsoft pages Enter triggers the
+            # same submit handler even when the visual button click is swallowed.
+            try:
+                password_field.focus()
+                password_field.press("Enter")
+                page.wait_for_timeout(1800)
+            except Exception:
+                pass
+
+            # 3) If still on the Microsoft auth page, submit the enclosing
+            # password form directly through requestSubmit().
+            try:
+                if "login.microsoftonline.com" in current_url():
+                    form = password_field.locator("xpath=ancestor::form[1]")
+                    if form.count():
+                        form.evaluate(
+                            "(form) => form.requestSubmit ? form.requestSubmit() : form.submit()"
+                        )
+                        page.wait_for_timeout(2200)
+            except Exception:
+                pass
+
+            # Do not silently continue forever on the password screen. The
+            # SAML handoff routine will provide the actual URL if Microsoft
+            # still hasn't accepted the authentication.
         def _finish_saml_handoff(page) -> None:
             """Wait for the Microsoft -> LAUSD SAML POST to finish.
 
@@ -1330,6 +1343,18 @@ class BrowserManager:
                     )
 
                 page.wait_for_timeout(800)
+
+            # Last-resort submit for a Microsoft page that remained
+            # on the authentication form after the normal submit sequence.
+            try:
+                if "login.microsoftonline.com" in (page.url or "").lower():
+                    password_field = page.locator('input[type="password"]')
+                    if password_field.count() and password_field.first.is_visible():
+                        password_field.first.focus()
+                        password_field.first.press("Enter")
+                        page.wait_for_timeout(2500)
+            except Exception:
+                pass
 
             raise RuntimeError(
                 f"LAUSD SSO handoff timed out. URL={page.url}"
