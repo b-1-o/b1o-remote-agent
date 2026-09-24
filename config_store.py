@@ -19,7 +19,7 @@ DEFAULTS: dict[str, Any] = {
     "school_days": [0, 1, 2, 3, 4],
     "school_time": "08:20",
     "zoom_time": "08:30",
-    "schoology_url": "https://lausdschoology.azurewebsites.net/en-US/Student/Login",
+    "schoology_url": "https://lms.lausd.net",
     "schoology_user": "eghabuzy0001@mymail.lausd.net",
     "schoology_password": "",
     "zoom_url": "https://lausd.zoom.us/j/4483525320",
@@ -65,6 +65,15 @@ def _ensure_file() -> None:
 
     defaults = _initial_settings()
     changed = False
+
+    # LAUSD's current student Schoology entry point is lms.lausd.net.
+    # Migrate the previous Azure-hosted Student/Login URL automatically.
+    if str(current.get("schoology_url", "")).strip() in {
+        "https://lausdschoology.azurewebsites.net/en-US/Student/Login",
+        "https://lausdschoology.azurewebsites.net/en-US/Student/Login/",
+    }:
+        current["schoology_url"] = "https://lms.lausd.net"
+        changed = True
 
     for key, value in defaults.items():
         if key not in current or current[key] in ("", None):
