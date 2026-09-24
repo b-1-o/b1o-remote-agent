@@ -1,6 +1,7 @@
 import asyncio
 import html
 import os
+from pathlib import Path
 
 import httpx
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -17,10 +18,7 @@ ALLOWED_CHAT_ID = os.getenv("B1O_TELEGRAM_CHAT_ID", "")
 PANEL_KEY = "panel_id"
 PANEL_HISTORY_KEY = "panel_history"
 MAX_PANEL_HISTORY = 8
-ZOOM_READY_IMAGE_URL = (
-    "https://raw.githubusercontent.com/b-1-o/b1o-remote-agent/"
-    "main/bot/assets/zoom_ready.jpg"
-)
+ZOOM_READY_IMAGE = Path(__file__).resolve().parent / "assets" / "zoom_ready.jpg"
 
 def allowed(update: Update) -> bool:
     return bool(ALLOWED_CHAT_ID) and update.effective_chat is not None and str(update.effective_chat.id) == ALLOWED_CHAT_ID
@@ -153,20 +151,26 @@ async def zoom_ready_panel(
     chat_id = update.effective_chat.id
     await _delete_old_panels(context, chat_id)
 
-    message = await context.bot.send_photo(
-        chat_id=chat_id,
-        photo=ZOOM_READY_IMAGE_URL,
-        caption=(
-            "<b>Zoom ready to join</b>\n"
-            "Name: <b>Erik</b>\n"
-            "🎙️ Microphone: <b>OFF</b>\n"
-            "📷 Camera: <b>OFF</b>"
-        ),
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Join", callback_data="zoom_join")]
-        ]),
-    )
+    if not ZOOM_READY_IMAGE.is_file():
+        raise RuntimeError(
+            f"Zoom ready image is missing: {ZOOM_READY_IMAGE}"
+        )
+
+    with ZOOM_READY_IMAGE.open("rb") as image_file:
+        message = await context.bot.send_photo(
+            chat_id=chat_id,
+            photo=image_file,
+            caption=(
+                "<b>Zoom ready to join</b>\n"
+                "Name: <b>Erik</b>\n"
+                "🎙️ Microphone: <b>OFF</b>\n"
+                "📷 Camera: <b>OFF</b>"
+            ),
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Join", callback_data="zoom_join")]
+            ]),
+        )
     context.chat_data[PANEL_KEY] = message.message_id
     context.chat_data[PANEL_HISTORY_KEY] = [message.message_id]
 
