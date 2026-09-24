@@ -942,6 +942,26 @@ class BrowserManager:
         with self._zoom_state_lock:
             return dict(self._zoom_state)
 
+    def close_zoom(self, slot: str = "zoom") -> dict:
+        """Close the active Zoom conference immediately, without confirmation."""
+        if self._school_timer is not None:
+            self._school_timer.cancel()
+            self._school_timer = None
+
+        result = self.close_slot(slot)
+        with self._zoom_state_lock:
+            self._zoom_state = {
+                "status": "idle",
+                "ready": False,
+                "error": "",
+            }
+
+        result.update({
+            "action": "zoom_close",
+            "status": "idle",
+        })
+        return result
+
     def cancel_zoom(self, slot: str = "zoom") -> dict:
         # Cancel means only close the Zoom tab and reset the preparation state
         # so the next Zoom press starts a fresh pre-join flow.
@@ -1094,9 +1114,6 @@ class BrowserManager:
         user = str(settings.get("schoology_user", "")).strip()
         password = str(settings.get("schoology_password", ""))
         login_url = str(settings.get("schoology_url", "")).strip() or "https://lms.lausd.net"
-
-        if not user or not password:
-            raise RuntimeError("Schoology credentials are not configured in Admin.")
 
         def _visible_input(page, selector: str):
             locator = page.locator(selector)
@@ -1369,6 +1386,41 @@ class BrowserManager:
                 timeout=30000,
             )
             page.wait_for_timeout(2200)
+
+            # When the configured LAUSD entry point is already /home, or the
+            # initial redirect lands on /home because a session is remembered,
+            # authentication is already satisfied. Never ask for credentials.
+            normalized_config = login_url.rstrip("/")
+            normalized_current = (page.url or "").rstrip("/")
+            if normalized_config.lower() == "https://lms.lausd.net/home".lower():
+                page.bring_to_front()
+                return {
+                    "success": True,
+                    "action": "schoology_login",
+                    "slot": slot,
+                    "already_logged_in": True,
+                    "login_completed": True,
+                    "url": page.url,
+                    "credentials_skipped": True,
+                }
+
+            if normalized_current.lower() == "https://lms.lausd.net/home".lower():
+                page.bring_to_front()
+                return {
+                    "success": True,
+                    "action": "schoology_login",
+                    "slot": slot,
+                    "already_logged_in": True,
+                    "login_completed": True,
+                    "url": page.url,
+                    "credentials_skipped": True,
+                }
+
+            if not user or not password:
+                raise RuntimeError(
+                    "Schoology credentials are not configured in Admin, "
+                    "and LAUSD is not already at /home."
+                )
 
             # lms.lausd.net currently redirects to LAUSD's Schoology
             # role picker. Always give the Students control a chance to act;
