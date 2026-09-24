@@ -252,7 +252,7 @@ class BrowserManager:
         # Emergency fallback: Playwright's own Chromium is version-matched to
         # the installed Playwright package and is therefore safer than trying
         # more arbitrary Brave flags when the branded executable exits during
-        # startup. citeturn363543search0turn363543search1
+        # startup.
         if self._context is None:
             fallback_args = [
                 "--no-first-run",
