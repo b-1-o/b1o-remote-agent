@@ -18,6 +18,14 @@ def open_zoom(slot: str = "zoom") -> dict:
     return browser_manager().open_zoom(slot)
 
 
+def start_zoom_async(slot: str = "zoom") -> dict:
+    return browser_manager().start_zoom_async(slot)
+
+
+def zoom_state() -> dict:
+    return browser_manager().zoom_state()
+
+
 def join_zoom(slot: str = "zoom") -> dict:
     return browser_manager().join_zoom(slot)
 

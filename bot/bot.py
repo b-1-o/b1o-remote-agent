@@ -200,11 +200,29 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             s=load_settings(); s['school_enabled']=not s['school_enabled']; save_settings(s)
             await panel(update,context,"<b>🎓 School Mode</b>",school_keyboard()); return
         if data=="zoom":
-            result = await agent('POST', '/open-zoom')
-            if not result.get("ready_to_join"):
-                raise RuntimeError("Zoom did not reach the ready-to-join state")
-            await zoom_ready_panel(update, context)
-            return
+            await agent('POST', '/zoom/start')
+            await panel(
+                update,
+                context,
+                "🎥 <b>Preparing Zoom…</b>",
+                school_keyboard(),
+            )
+
+            for _ in range(90):
+                await asyncio.sleep(1)
+                state = await agent('GET', '/zoom/state')
+                status = state.get("status")
+
+                if status == "ready" and state.get("ready"):
+                    await zoom_ready_panel(update, context)
+                    return
+
+                if status == "error":
+                    raise RuntimeError(
+                        f"Zoom: {state.get('error') or 'pre-join failed'}"
+                    )
+
+            raise RuntimeError("Zoom preparation timed out")
 
         if data=="zoom_join":
             try:

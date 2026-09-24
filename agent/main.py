@@ -12,6 +12,8 @@ from .actions import (
     open_url,
     open_zoom,
     join_zoom,
+    start_zoom_async,
+    zoom_state,
     run_command,
     start_school_mode,
 )
@@ -60,6 +62,18 @@ def focus_browser(slot: str, x_agent_token: str | None = Header(default=None)):
 def close_browser(slot: str, x_agent_token: str | None = Header(default=None)):
     authenticate(x_agent_token)
     return browser_close(slot)
+
+
+@app.get("/zoom/state")
+def zoom_state_endpoint(x_agent_token: str | None = Header(default=None)):
+    authenticate(x_agent_token)
+    return zoom_state()
+
+
+@app.post("/zoom/start")
+def zoom_start_endpoint(x_agent_token: str | None = Header(default=None)):
+    authenticate(x_agent_token)
+    return start_zoom_async("zoom")
 
 
 @app.post("/open-zoom")

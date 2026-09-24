@@ -126,6 +126,8 @@ class BrowserManager:
         self._browser = None
         self._context = None
         self._fatal_error: Exception | None = None
+        self._zoom_state: dict[str, Any] = {"status": "idle"}
+        self._zoom_state_lock = threading.Lock()
 
     def _ensure_started(self) -> None:
         with self._start_lock:
@@ -827,6 +829,60 @@ class BrowserManager:
             "video_off": bool(video_off),
             "audio_off": bool(audio_off),
         }
+
+    def start_zoom_async(self, slot: str = "zoom") -> dict:
+        with self._zoom_state_lock:
+            current = self._zoom_state.get("status")
+            if current in {"starting", "preparing", "ready"}:
+                return {
+                    "success": True,
+                    "action": "zoom_start",
+                    "status": current,
+                }
+
+            self._zoom_state = {
+                "status": "starting",
+                "error": "",
+                "ready": False,
+            }
+
+        def worker() -> None:
+            with self._zoom_state_lock:
+                self._zoom_state["status"] = "preparing"
+
+            try:
+                result = self.open_zoom(slot)
+                with self._zoom_state_lock:
+                    self._zoom_state.update({
+                        "status": "ready",
+                        "ready": True,
+                        "result": result,
+                        "error": "",
+                    })
+            except Exception as exc:
+                with self._zoom_state_lock:
+                    self._zoom_state.update({
+                        "status": "error",
+                        "ready": False,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    })
+
+        thread = threading.Thread(
+            target=worker,
+            name="b1o-zoom-prejoin",
+            daemon=True,
+        )
+        thread.start()
+
+        return {
+            "success": True,
+            "action": "zoom_start",
+            "status": "starting",
+        }
+
+    def zoom_state(self) -> dict[str, Any]:
+        with self._zoom_state_lock:
+            return dict(self._zoom_state)
 
     def open_zoom(self, slot: str = "zoom") -> dict:
         settings = load_settings()
