@@ -124,6 +124,7 @@ class BrowserManager:
         self._school_timer: threading.Timer | None = None
         self._pw = None
         self._browser = None
+        self._browser_kind = "none"
         self._context = None
         self._fatal_error: Exception | None = None
         self._zoom_state: dict[str, Any] = {"status": "idle"}
@@ -179,35 +180,49 @@ class BrowserManager:
             self._context = None
 
     def _start_browser(self) -> None:
+        import os
+
         settings = load_settings()
         executable = _browser_path(settings)
 
-        # Brave can terminate immediately when a fixed Wayland backend is
-        # forced from a systemd user service. Let Chromium/Brave choose the
-        # platform first, then retry with GPU disabled for compositor/driver
-        # startup failures.
-        launch_variants = [
-            [
-                "--no-first-run",
-                "--disable-session-crashed-bubble",
-                "--disable-dev-shm-usage",
-            ],
-            [
-                "--no-first-run",
-                "--disable-session-crashed-bubble",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-            ],
-            [
-                "--ozone-platform=wayland",
-                "--no-first-run",
-                "--disable-session-crashed-bubble",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-            ],
+        # Brave can exit immediately under a user systemd service when its
+        # compositor/backend or sandbox startup path disagrees with the current
+        # Hyprland/XWayland session. Try a few isolated launch configurations,
+        # then fall back to Playwright's bundled Chromium rather than leaving
+        # LAUSD/Zoom completely unavailable.
+        base_args = [
+            "--no-first-run",
+            "--disable-session-crashed-bubble",
+            "--disable-dev-shm-usage",
+            "--no-sandbox",
         ]
 
+        launch_variants: list[list[str]] = [
+            [*base_args, "--disable-gpu"],
+        ]
+
+        env = os.environ.copy()
+
+        # Prefer an explicitly available desktop backend when the session
+        # exposes one. Do not change systemd/UWSM; this only affects the child
+        # browser process.
+        if env.get("WAYLAND_DISPLAY"):
+            launch_variants.append([
+                *base_args,
+                "--disable-gpu",
+                "--ozone-platform=wayland",
+            ])
+
+        if env.get("DISPLAY"):
+            launch_variants.append([
+                *base_args,
+                "--disable-gpu",
+                "--ozone-platform=x11",
+            ])
+
         last_error: Exception | None = None
+
+        # First try the configured Brave executable.
         for args in launch_variants:
             browser = None
             try:
@@ -215,10 +230,13 @@ class BrowserManager:
                     executable_path=executable,
                     headless=False,
                     args=args,
+                    env=env,
+                    timeout=30000,
                 )
                 context = browser.new_context()
                 self._browser = browser
                 self._context = context
+                self._browser_kind = "brave"
                 last_error = None
                 break
             except Exception as exc:
@@ -231,10 +249,45 @@ class BrowserManager:
                     except Exception:
                         pass
 
+        # Emergency fallback: Playwright's own Chromium is version-matched to
+        # the installed Playwright package and is therefore safer than trying
+        # more arbitrary Brave flags when the branded executable exits during
+        # startup. citeturn363543search0turn363543search1
+        if self._context is None:
+            fallback_args = [
+                "--no-first-run",
+                "--disable-session-crashed-bubble",
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+                "--disable-gpu",
+            ]
+            browser = None
+            try:
+                browser = self._pw.chromium.launch(
+                    headless=False,
+                    args=fallback_args,
+                    env=env,
+                    timeout=30000,
+                )
+                context = browser.new_context()
+                self._browser = browser
+                self._context = context
+                self._browser_kind = "playwright-chromium"
+                last_error = None
+            except Exception as exc:
+                last_error = exc
+                self._browser = None
+                self._context = None
+                if browser is not None:
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
+
         if self._context is None:
             raise RuntimeError(
-                "Brave failed to start under Playwright. "
-                f"Last error: {type(last_error).__name__}: {last_error}"
+                "No managed browser could be started. "
+                f"Brave/Chromium last error: {type(last_error).__name__}: {last_error}"
             ) from last_error
 
         # Auto-allow media permissions for Zoom so Chromium does not show
