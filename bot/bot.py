@@ -247,7 +247,8 @@ async def zoom_ready_panel(
                 ),
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("Join", callback_data="zoom_join")]
+                    [InlineKeyboardButton("Join", callback_data="zoom_join")],
+                    [InlineKeyboardButton("Cancel", callback_data="zoom_cancel")],
                 ]),
             )
 
@@ -266,7 +267,8 @@ async def zoom_ready_panel(
             ),
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Join", callback_data="zoom_join")]
+                [InlineKeyboardButton("Join", callback_data="zoom_join")],
+                [InlineKeyboardButton("Cancel", callback_data="zoom_cancel")],
             ]),
         )
         context.chat_data[PANEL_KEY] = message.message_id
@@ -346,9 +348,33 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 school_keyboard(),
             )
             return
+        if data=="zoom_cancel":
+            await agent('POST', '/zoom/cancel')
+            try:
+                await q.message.delete()
+            except Exception:
+                pass
+            await panel(
+                update,
+                context,
+                "✖️ <b>Zoom cancelled</b>",
+                school_keyboard(),
+            )
+            return
         if data=="lausd":
-            asyncio.create_task(background_schoology(update, context))
-            await panel(update,context,'🏫 LAUSD login started.',school_keyboard())
+            await panel(
+                update,
+                context,
+                "🏫 <b>Opening LAUSD…</b>",
+                school_keyboard(),
+            )
+            result = await agent('POST', '/open-schoology-login')
+            await panel(
+                update,
+                context,
+                f"✅ <b>LAUSD opened</b>\n<code>{html.escape(str(result.get('url', '')))}</code>",
+                school_keyboard(),
+            )
             return
         if data=="run_school":
             asyncio.create_task(background_school(update, context))
