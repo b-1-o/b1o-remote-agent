@@ -182,17 +182,60 @@ class BrowserManager:
         settings = load_settings()
         executable = _browser_path(settings)
 
-        browser = self._pw.chromium.launch(
-            executable_path=executable,
-            headless=False,
-            args=[
+        # Brave can terminate immediately when a fixed Wayland backend is
+        # forced from a systemd user service. Let Chromium/Brave choose the
+        # platform first, then retry with GPU disabled for compositor/driver
+        # startup failures.
+        launch_variants = [
+            [
+                "--no-first-run",
+                "--disable-session-crashed-bubble",
+                "--disable-dev-shm-usage",
+            ],
+            [
+                "--no-first-run",
+                "--disable-session-crashed-bubble",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+            ],
+            [
                 "--ozone-platform=wayland",
                 "--no-first-run",
                 "--disable-session-crashed-bubble",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
             ],
-        )
-        self._browser = browser
-        self._context = browser.new_context()
+        ]
+
+        last_error: Exception | None = None
+        for args in launch_variants:
+            browser = None
+            try:
+                browser = self._pw.chromium.launch(
+                    executable_path=executable,
+                    headless=False,
+                    args=args,
+                )
+                context = browser.new_context()
+                self._browser = browser
+                self._context = context
+                last_error = None
+                break
+            except Exception as exc:
+                last_error = exc
+                self._browser = None
+                self._context = None
+                if browser is not None:
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
+
+        if self._context is None:
+            raise RuntimeError(
+                "Brave failed to start under Playwright. "
+                f"Last error: {type(last_error).__name__}: {last_error}"
+            ) from last_error
 
         # Auto-allow media permissions for Zoom so Chromium does not show
         # camera/microphone permission prompts during the automated join flow.
@@ -210,12 +253,27 @@ class BrowserManager:
                 pass
 
     def _context_is_alive(self) -> bool:
+        if self._browser is None:
+            return False
+        try:
+            if not self._browser.is_connected():
+                self._browser = None
+                self._context = None
+                self._tabs.clear()
+                return False
+        except Exception:
+            self._browser = None
+            self._context = None
+            self._tabs.clear()
+            return False
+
         if self._context is None:
             return False
         try:
             _ = self._context.pages
             return True
         except Exception:
+            self._browser = None
             self._context = None
             self._tabs.clear()
             return False
