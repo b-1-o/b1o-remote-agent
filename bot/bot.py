@@ -357,6 +357,13 @@ async def stop_zoom_chat_live(context: ContextTypes.DEFAULT_TYPE) -> None:
         task.cancel()
 
 
+def shutdown_confirm_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⚠️ Tap again to Shutdown", callback_data="shutdown_confirm")],
+        [InlineKeyboardButton("↩ Cancel", callback_data="home")],
+    ])
+
+
 def home_text() -> str:
     s=load_settings()
     return f"<b>b1o Remote</b>\n\nSchool Mode: <b>{'ON' if s['school_enabled'] else 'OFF'}</b>\nSchedule: <b>{html.escape(s['school_time'])}</b>\nZoom: <b>{html.escape(s['zoom_time'])}</b>"
@@ -773,7 +780,24 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data=='unlock':
             await agent('POST','/unlock'); await panel(update,context,'🔓 Unlock command sent.',home_keyboard()); return
         if data=='lock': await agent('POST','/lock'); await panel(update,context,'🔒 Locked.',home_keyboard()); return
-        if data=='shutdown': await agent('POST','/shutdown'); await panel(update,context,'⏻ Shutdown requested.',home_keyboard()); return
+        if data=='shutdown':
+            await panel(
+                update,
+                context,
+                "<b>⚠️ Shutdown</b>\n\nTap the button again to turn off the PC.",
+                shutdown_confirm_keyboard(),
+            )
+            return
+
+        if data=='shutdown_confirm':
+            await agent('POST','/shutdown')
+            await panel(
+                update,
+                context,
+                "⏻ <b>Shutdown requested.</b>",
+                home_keyboard(),
+            )
+            return
         if data=='noop': return
     except Exception as exc:
         message = str(exc) or type(exc).__name__
