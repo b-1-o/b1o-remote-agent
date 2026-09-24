@@ -30,6 +30,10 @@ def join_zoom(slot: str = "zoom") -> dict:
     return browser_manager().join_zoom(slot)
 
 
+def cancel_zoom(slot: str = "zoom") -> dict:
+    return browser_manager().cancel_zoom(slot)
+
+
 def open_schoology(slot: str = "lausd") -> dict:
     return browser_manager().open_schoology(slot)
 
