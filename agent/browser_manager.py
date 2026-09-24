@@ -942,6 +942,27 @@ class BrowserManager:
         with self._zoom_state_lock:
             return dict(self._zoom_state)
 
+    def cancel_zoom(self, slot: str = "zoom") -> dict:
+        # Cancel means only close the Zoom tab and reset the preparation state
+        # so the next Zoom press starts a fresh pre-join flow.
+        if self._school_timer is not None:
+            self._school_timer.cancel()
+            self._school_timer = None
+
+        result = self.close_slot(slot)
+        with self._zoom_state_lock:
+            self._zoom_state = {
+                "status": "idle",
+                "ready": False,
+                "error": "",
+            }
+
+        result.update({
+            "action": "zoom_cancel",
+            "status": "idle",
+        })
+        return result
+
     def open_zoom(self, slot: str = "zoom") -> dict:
         settings = load_settings()
         invite_url = str(settings.get("zoom_url", "")).strip()
