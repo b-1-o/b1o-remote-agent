@@ -42,6 +42,7 @@ async def delete_message(message) -> None:
 
 def home_keyboard() -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton("🎓 School Mode", callback_data="school")],
+            [InlineKeyboardButton("🌫 Browser", callback_data="browser")],
             [InlineKeyboardButton("🧩 Actions", callback_data="actions")],
             [InlineKeyboardButton("📊 Status", callback_data="status")],
             [InlineKeyboardButton("🔓 Unlock", callback_data="unlock"), InlineKeyboardButton("🔒 Lock", callback_data="lock")],
@@ -67,6 +68,121 @@ def actions_keyboard() -> InlineKeyboardMarkup:
     if not rows: rows=[[InlineKeyboardButton("No custom buttons yet", callback_data="noop")]]
     rows.append([InlineKeyboardButton("⬅️ Home", callback_data="home")])
     return InlineKeyboardMarkup(rows)
+
+def _browser_slot_key(context: ContextTypes.DEFAULT_TYPE, index: int) -> str:
+    slots = list(context.chat_data.get("browser_slots", []))
+    if 0 <= index < len(slots):
+        return str(slots[index])
+    raise RuntimeError("Browser tab is no longer available")
+
+
+def browser_keyboard(tabs: list[dict]) -> InlineKeyboardMarkup:
+    rows = []
+    for index, tab in enumerate(tabs[:12]):
+        slot = str(tab.get("slot", "tab"))
+        title = str(tab.get("title", "")).strip() or "Untitled"
+        url = str(tab.get("url", "")).strip()
+
+        if slot == "zoom":
+            icon = "🎥"
+            label = "Zoom"
+        elif slot == "lausd":
+            icon = "🏫"
+            label = "LAUSD"
+        else:
+            icon = "🌐"
+            label = title[:24]
+
+        rows.append([
+            InlineKeyboardButton(
+                f"{icon} {label}",
+                callback_data=f"bf:{index}",
+            ),
+            InlineKeyboardButton("✕", callback_data=f"bc:{index}"),
+        ])
+
+    rows.append([
+        InlineKeyboardButton("↻ Refresh", callback_data="browser"),
+        InlineKeyboardButton("⌂ Home", callback_data="home"),
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
+def browser_text(tabs: list[dict], updated: bool = False) -> str:
+    count = len(tabs)
+    pulse = "·  ◌  ·" if updated else "·  ✦  ·"
+
+    lines = [
+        "<b>🌫 b1o / BROWSER</b>",
+        f"<code>{pulse}</code>  <i>live session</i>",
+        "",
+        f"<b>{count}</b> open " + ("tab" if count == 1 else "tabs"),
+        "",
+    ]
+
+    if not tabs:
+        lines.extend([
+            "<i>╭ fog is clear",
+            "╰ no managed tabs are open</i>",
+        ])
+    else:
+        for tab in tabs[:12]:
+            slot = html.escape(str(tab.get("slot", "tab")))
+            title = html.escape(str(tab.get("title", "")).strip() or "Untitled")
+            url = html.escape(str(tab.get("url", "")).strip() or "about:blank")
+            if len(url) > 68:
+                url = url[:65] + "…"
+            lines.extend([
+                f"🌫 <b>{slot}</b>",
+                f"   <i>{title}</i>",
+                f"   <code>{url}</code>",
+                "",
+            ])
+
+    lines.extend([
+        "<code>╭────────────────────╮",
+        "│   LIVE / MANAGED   │",
+        "╰────────────────────╯</code>",
+    ])
+    return "\n".join(lines)
+
+
+async def show_browser(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    animated: bool = False,
+) -> None:
+    q = update.callback_query
+    if animated:
+        await panel(
+            update,
+            context,
+            "<b>🌫 b1o / BROWSER</b>\n\n<code>·  ◌  ·  ◌  ·</code>\n<i>gliding through open tabs…</i>",
+            browser_keyboard([]),
+        )
+
+    result = await agent("GET", "/browser/tabs")
+    tabs = result.get("tabs") or []
+    context.chat_data["browser_slots"] = [
+        str(tab.get("slot", "")) for tab in tabs[:12]
+    ]
+    keyboard = browser_keyboard(tabs)
+    text_value = browser_text(tabs, updated=animated)
+
+    if q:
+        try:
+            await q.message.edit_text(
+                text_value,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard,
+            )
+            context.chat_data[PANEL_KEY] = q.message.message_id
+            return
+        except Exception:
+            pass
+
+    await panel(update, context, text_value, keyboard)
+
 
 def home_text() -> str:
     s=load_settings()
@@ -295,6 +411,25 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if data=="home": await panel(update,context,home_text(),home_keyboard()); return
         if data=="school": await panel(update,context,"<b>🎓 School Mode</b>\n\nOnly use controls below. Configuration is managed on the PC admin site.",school_keyboard()); return
+        if data=="browser":
+            await show_browser(update, context, animated=True)
+            return
+        if data.startswith("bf:"):
+            index = int(data.split(":", 1)[1])
+            slot = _browser_slot_key(context, index)
+            await agent("POST", f"/browser/focus/{slot}")
+            await show_browser(update, context)
+            return
+        if data.startswith("bc:"):
+            index = int(data.split(":", 1)[1])
+            slot = _browser_slot_key(context, index)
+            if slot == "zoom":
+                await agent("POST", "/zoom/cancel")
+            else:
+                await agent("POST", f"/browser/close/{slot}")
+            await show_browser(update, context)
+            return
+
         if data=="toggle_school":
             from config_store import save_settings
             s=load_settings(); s['school_enabled']=not s['school_enabled']; save_settings(s)
@@ -365,16 +500,36 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await panel(
                 update,
                 context,
-                "🏫 <b>Opening LAUSD…</b>",
+                "🌫 <b>Opening LAUSD…</b>\n\n<code>·  ◌  ·  ◌  ·</code>",
                 school_keyboard(),
             )
-            result = await agent('POST', '/open-schoology-login')
-            await panel(
-                update,
-                context,
-                f"✅ <b>LAUSD opened</b>\n<code>{html.escape(str(result.get('url', '')))}</code>",
-                school_keyboard(),
-            )
+            try:
+                result = await agent('POST', '/open-schoology-login')
+            except Exception as exc:
+                await panel(
+                    update,
+                    context,
+                    f"❌ <b>LAUSD</b>\n\n<code>{html.escape(str(exc))[:900]}</code>",
+                    school_keyboard(),
+                )
+                return
+
+            url = html.escape(str(result.get('url', '')))
+            login_done = result.get('login_completed')
+            if login_done is False:
+                await panel(
+                    update,
+                    context,
+                    f"⚠️ <b>LAUSD opened</b>\n\nLogin was not completed automatically.\n\n<code>{url}</code>",
+                    school_keyboard(),
+                )
+            else:
+                await panel(
+                    update,
+                    context,
+                    f"✓ <b>LAUSD ready</b>\n\n<code>{url}</code>",
+                    school_keyboard(),
+                )
             return
         if data=="run_school":
             asyncio.create_task(background_school(update, context))
