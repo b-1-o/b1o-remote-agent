@@ -1098,62 +1098,123 @@ class BrowserManager:
         if not user or not password:
             raise RuntimeError("Schoology credentials are not configured in Admin.")
         if not login_url:
-            raise RuntimeError("Schoology Student Login URL is not configured.")
+            login_url = "https://lms.lausd.net"
+
+        # Normalize the retired Azure-hosted entry point to the current LAUSD
+        # student LMS entry point.
+        if "lausdschoology.azurewebsites.net" in login_url:
+            login_url = "https://lms.lausd.net"
+
+        def click_student_entry(page) -> bool:
+            candidates = [
+                page.get_by_role("link", name=re.compile(r"^student$", re.I)),
+                page.get_by_role("button", name=re.compile(r"^student$", re.I)),
+                page.get_by_text(re.compile(r"^student$", re.I)),
+            ]
+            node = self._first_visible(candidates)
+            if node is None:
+                return False
+            try:
+                node.click()
+                page.wait_for_timeout(1500)
+                return True
+            except Exception:
+                return False
+
+        def find_visible(locator):
+            try:
+                count = locator.count()
+            except Exception:
+                return None
+            for index in range(min(count, 10)):
+                try:
+                    item = locator.nth(index)
+                    if item.is_visible():
+                        return item
+                except Exception:
+                    continue
+            return None
 
         def job() -> dict:
             page = self._new_page(slot)
-
-            # Reuse an already-authenticated LAUSD tab instead of restarting
-            # the Microsoft login flow on every Telegram/Admin click.
-            current = (page.url or "").lower()
-            if (
-                current
-                and current != "about:blank"
-                and "login.microsoftonline.com" not in current
-                and "login.live.com" not in current
-                and "student/login" not in current
-                and "login" not in current
-            ):
-                page.bring_to_front()
-                return {
-                    "success": True,
-                    "action": "schoology_login",
-                    "slot": slot,
-                    "already_logged_in": True,
-                    "url": page.url,
-                }
-
+            page.bring_to_front()
             page.goto(login_url, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(3000)
+            page.wait_for_timeout(2000)
 
-            current = page.url.lower()
-            if "schoology" in current and "student/login" not in current and "login" not in current:
-                page.bring_to_front()
-                return {
-                    "success": True,
-                    "action": "schoology_login",
-                    "slot": slot,
-                    "already_logged_in": True,
-                    "url": page.url,
-                }
+            # The current LAUSD LMS flow starts at lms.lausd.net and asks the
+            # user to choose Student before showing the credential form.
+            current = (page.url or "").lower()
+            if "lms.lausd.net" in current:
+                click_student_entry(page)
 
-            # Microsoft can land directly on the password step when a prior
-            # account choice is remembered. Handle that before looking for the
-            # account tile/email field.
-            password_field = page.locator('input[type="password"]')
-            try:
-                has_password = password_field.count() and password_field.first.is_visible()
-            except Exception:
-                has_password = False
+            # Give the login page a few seconds to render after the Student
+            # selection/redirect.
+            page.wait_for_timeout(1500)
 
-            if not has_password:
+            password_locator = page.locator('input[type="password"]')
+            username_locator = page.locator(
+                'input[type="email"], '
+                'input[name*="user" i], '
+                'input[name*="email" i], '
+                'input[name="loginfmt"], '
+                'input[name="identifier"], '
+                'input[type="text"]'
+            )
+
+            password_field = find_visible(password_locator)
+            username_field = find_visible(username_locator)
+
+            # Microsoft/SSO may return a password-only page when the account
+            # tile was remembered.
+            if password_field is None and username_field is None:
+                # Handle an account tile/email step when LAUSD redirects to
+                # Microsoft SSO.
                 _click_account_tile(page, user)
                 page.wait_for_timeout(1200)
+                password_field = find_visible(password_locator)
+                username_field = find_visible(username_locator)
 
-            _fill_password(page, password)
+            if username_field is not None:
+                try:
+                    current_user = str(username_field.input_value()).strip()
+                except Exception:
+                    current_user = ""
+                if not current_user:
+                    username_field.fill(user)
 
-            # Microsoft may show the optional "Stay signed in?" step.
-            page.wait_for_timeout(1200)
+                # Fill password on the same form when available.
+                password_field = find_visible(password_locator)
+                if password_field is None:
+                    next_button = self._first_visible([
+                        page.get_by_role("button", name=re.compile(r"^(next|sign in|continue)$", re.I)),
+                        page.get_by_role("link", name=re.compile(r"^(next|sign in|continue)$", re.I)),
+                    ])
+                    if next_button is not None:
+                        next_button.click()
+                    else:
+                        username_field.press("Enter")
+                    page.wait_for_timeout(1200)
+                    password_field = find_visible(password_locator)
+
+            if password_field is None:
+                raise RuntimeError(
+                    f"LAUSD login password field was not found. URL={page.url}"
+                )
+
+            password_field.fill(password)
+
+            sign_in = self._first_visible([
+                page.get_by_role("button", name=re.compile(r"^(sign in|next|continue|login)$", re.I)),
+                page.get_by_role("link", name=re.compile(r"^(sign in|next|continue|login)$", re.I)),
+            ])
+            if sign_in is not None:
+                sign_in.click()
+            else:
+                password_field.press("Enter")
+
+            page.wait_for_timeout(5000)
+
+            # Handle Microsoft's optional "Stay signed in?" step.
             stay_yes = self._first_visible([
                 page.get_by_role("button", name=re.compile(r"^yes$", re.I)),
                 page.get_by_text(re.compile(r"^yes$", re.I)),
@@ -1161,18 +1222,33 @@ class BrowserManager:
             if stay_yes is not None:
                 try:
                     stay_yes.click()
+                    page.wait_for_timeout(3000)
                 except Exception:
                     pass
 
-            page.wait_for_timeout(6000)
             page.bring_to_front()
+            final_url = page.url
+
+            # If the browser is still on a login/password page, return a useful
+            # diagnostic instead of reporting success prematurely.
+            lowered = final_url.lower()
+            still_login = (
+                "login.microsoftonline.com" in lowered
+                or "login.live.com" in lowered
+                or "/student/login" in lowered
+                or lowered.rstrip("/").endswith("/login")
+            )
+            if still_login:
+                raise RuntimeError(
+                    f"LAUSD login did not complete. URL={final_url}"
+                )
 
             return {
                 "success": True,
                 "action": "schoology_login",
                 "slot": slot,
                 "already_logged_in": False,
-                "url": page.url,
+                "url": final_url,
             }
 
         return self.call(job)
