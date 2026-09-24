@@ -42,6 +42,8 @@ async def delete_message(message) -> None:
 
 def home_keyboard() -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton("🎓 School Mode", callback_data="school")],
+            [InlineKeyboardButton("🎥 Zoom", callback_data="zoom")],
+            [InlineKeyboardButton("💬 Zoom Chat", callback_data="zoom_chat")],
             [InlineKeyboardButton("🌫 Browser", callback_data="browser")],
             [InlineKeyboardButton("🧩 Actions", callback_data="actions")],
             [InlineKeyboardButton("📊 Status", callback_data="status")],
@@ -101,8 +103,15 @@ def browser_keyboard(tabs: list[dict]) -> InlineKeyboardMarkup:
             InlineKeyboardButton("✕", callback_data=f"bc:{index}"),
         ])
 
+    if any(str(tab.get("slot", "")) == "zoom" for tab in tabs):
+        rows.append([
+            InlineKeyboardButton("💬 Zoom Chat", callback_data="zoom_chat"),
+            InlineKeyboardButton("↻ Refresh", callback_data="browser"),
+        ])
+    else:
+        rows.append([InlineKeyboardButton("↻ Refresh", callback_data="browser")])
+
     rows.append([
-        InlineKeyboardButton("↻ Refresh", callback_data="browser"),
         InlineKeyboardButton("⌂ Home", callback_data="home"),
     ])
     return InlineKeyboardMarkup(rows)
@@ -184,6 +193,167 @@ async def show_browser(
     await panel(update, context, text_value, keyboard)
 
 
+def zoom_chat_keyboard(live: bool = False) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("↻ Refresh", callback_data="zoom_chat"),
+            InlineKeyboardButton(
+                "🟢 Live" if live else "⚪ Live",
+                callback_data="zoom_chat_live",
+            ),
+        ],
+        [
+            InlineKeyboardButton("🌫 Browser", callback_data="browser"),
+            InlineKeyboardButton("⌂ Home", callback_data="home"),
+        ],
+    ])
+
+
+def zoom_chat_text(result: dict) -> str:
+    messages = result.get("messages") or []
+    is_open = bool(result.get("open"))
+    new_messages = result.get("new_messages") or []
+
+    lines = [
+        "<b>💬 b1o / ZOOM CHAT</b>",
+        "<code>╭────────────────────────╮</code>",
+        "<code>│  live meeting channel  │</code>",
+        "<code>╰────────────────────────╯</code>",
+        "",
+    ]
+
+    if not is_open:
+        lines.extend([
+            "🌫 <i>Zoom tab is not open.</i>",
+            "",
+            "Open Zoom first, then return here.",
+        ])
+    elif not messages:
+        lines.extend([
+            "🌫 <i>Chat is quiet.</i>",
+            "",
+            "<code>waiting for messages…</code>",
+        ])
+    else:
+        recent = messages[-14:]
+        for message in recent:
+            text = html.escape(str(message.get("text", "")).strip())
+            stamp = html.escape(str(message.get("time", "")).strip())
+            if not text:
+                continue
+            if len(text) > 420:
+                text = text[:417] + "…"
+            lines.extend([
+                f"<code>{stamp}</code>  <b>●</b>",
+                f"<i>{text}</i>",
+                "<code>────────────</code>",
+            ])
+
+        if new_messages:
+            lines.insert(4, f"✨ <b>{len(new_messages)} new</b> message" + ("s" if len(new_messages) != 1 else ""))
+            lines.insert(5, "")
+
+    lines.extend([
+        "",
+        f"<i>{len(messages)} messages cached • read-only</i>",
+    ])
+    return "\n".join(lines)
+
+
+async def show_zoom_chat(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    live: bool | None = None,
+) -> None:
+    q = update.callback_query
+
+    if live is not None:
+        context.chat_data["zoom_chat_live"] = bool(live)
+
+    current_live = bool(context.chat_data.get("zoom_chat_live", False))
+    try:
+        result = await agent("GET", "/browser/chat")
+    except Exception as exc:
+        result = {
+            "open": False,
+            "messages": [],
+            "error": str(exc),
+        }
+
+    if result.get("error"):
+        text_value = (
+            "<b>💬 b1o / ZOOM CHAT</b>\n\n"
+            f"❌ <code>{html.escape(str(result['error']))[:900]}</code>"
+        )
+    else:
+        text_value = zoom_chat_text(result)
+
+    keyboard = zoom_chat_keyboard(current_live)
+
+    if q:
+        try:
+            await q.message.edit_text(
+                text_value,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard,
+            )
+            context.chat_data[PANEL_KEY] = q.message.message_id
+            context.chat_data["zoom_chat_message_id"] = q.message.message_id
+            context.chat_data["_chat_id"] = update.effective_chat.id
+            return
+        except Exception:
+            pass
+
+    await panel(update, context, text_value, keyboard)
+
+
+async def zoom_chat_live_loop(context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = context.chat_data.get("_chat_id")
+    message_id = context.chat_data.get("zoom_chat_message_id")
+    if not chat_id or not message_id:
+        return
+
+    while context.chat_data.get("zoom_chat_live", False):
+        try:
+            result = await agent("GET", "/browser/chat")
+            text_value = zoom_chat_text(result)
+            keyboard = zoom_chat_keyboard(True)
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text_value,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard,
+            )
+        except Exception:
+            pass
+        await asyncio.sleep(3)
+
+
+async def ensure_zoom_chat_live(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    context.chat_data["_chat_id"] = update.effective_chat.id
+    q = update.callback_query
+    if q and q.message:
+        context.chat_data["zoom_chat_message_id"] = q.message.message_id
+
+    task = context.chat_data.get("zoom_chat_task")
+    if task is not None and not task.done():
+        return
+
+    task = asyncio.create_task(zoom_chat_live_loop(context))
+    context.chat_data["zoom_chat_task"] = task
+
+
+async def stop_zoom_chat_live(context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.chat_data["zoom_chat_live"] = False
+    task = context.chat_data.pop("zoom_chat_task", None)
+    if task is not None and not task.done():
+        task.cancel()
+
+
 def home_text() -> str:
     s=load_settings()
     return f"<b>b1o Remote</b>\n\nSchool Mode: <b>{'ON' if s['school_enabled'] else 'OFF'}</b>\nSchedule: <b>{html.escape(s['school_time'])}</b>\nZoom: <b>{html.escape(s['zoom_time'])}</b>"
@@ -237,6 +407,7 @@ async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, k
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update): await delete_message(update.message); return
+    await stop_zoom_chat_live(context)
     await delete_message(update.message)
     await panel(update, context, home_text(), home_keyboard())
 
@@ -409,9 +580,28 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update): return
     data=q.data or ""
     try:
-        if data=="home": await panel(update,context,home_text(),home_keyboard()); return
-        if data=="school": await panel(update,context,"<b>🎓 School Mode</b>\n\nOnly use controls below. Configuration is managed on the PC admin site.",school_keyboard()); return
+        if data=="home":
+            await stop_zoom_chat_live(context)
+            await panel(update,context,home_text(),home_keyboard())
+            return
+        if data=="zoom_chat":
+            await show_zoom_chat(update, context)
+            return
+        if data=="zoom_chat_live":
+            enabled = not bool(context.chat_data.get("zoom_chat_live", False))
+            if enabled:
+                await show_zoom_chat(update, context, live=True)
+                await ensure_zoom_chat_live(update, context)
+            else:
+                await stop_zoom_chat_live(context)
+                await show_zoom_chat(update, context, live=False)
+            return
+        if data=="school":
+            await stop_zoom_chat_live(context)
+            await panel(update,context,"<b>🎓 School Mode</b>\n\nOnly use controls below. Configuration is managed on the PC admin site.",school_keyboard())
+            return
         if data=="browser":
+            await stop_zoom_chat_live(context)
             await show_browser(update, context, animated=True)
             return
         if data.startswith("bf:"):
@@ -534,7 +724,10 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data=="run_school":
             asyncio.create_task(background_school(update, context))
             await panel(update,context,'🚀 School Mode started.',school_keyboard()); return
-        if data=="actions": await panel(update,context,'<b>🧩 Actions</b>\nButtons installed from the PC admin panel.',actions_keyboard()); return
+        if data=="actions":
+            await stop_zoom_chat_live(context)
+            await panel(update,context,'<b>🧩 Actions</b>\nButtons installed from the PC admin panel.',actions_keyboard())
+            return
         if data.startswith('cmd:'):
             command_id = data.split(':',1)[1]
             command = next(
