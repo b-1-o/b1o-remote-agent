@@ -18,7 +18,7 @@ ALLOWED_CHAT_ID = os.getenv("B1O_TELEGRAM_CHAT_ID", "")
 PANEL_KEY = "panel_id"
 PANEL_HISTORY_KEY = "panel_history"
 MAX_PANEL_HISTORY = 8
-ZOOM_READY_IMAGE = Path(__file__).resolve().parent / "assets" / "zoom_ready.jpg"
+ZOOM_READY_IMAGE = Path.home() / ".cache" / "b1o-remote" / "zoom_ready.png"
 
 def allowed(update: Update) -> bool:
     return bool(ALLOWED_CHAT_ID) and update.effective_chat is not None and str(update.effective_chat.id) == ALLOWED_CHAT_ID
@@ -144,6 +144,88 @@ async def background_schoology(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
 
+def create_zoom_ready_image() -> Path:
+    from PIL import Image, ImageDraw, ImageFont
+
+    ZOOM_READY_IMAGE.parent.mkdir(parents=True, exist_ok=True)
+
+    width, height = 900, 520
+    image = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(image)
+
+    blue = (45, 117, 240)
+    dark = (28, 28, 32)
+
+    # Minimal Zoom-style camera logo.
+    logo_size = 150
+    logo_x = (width - logo_size) // 2
+    logo_y = 70
+    radius = 34
+    draw.rounded_rectangle(
+        (logo_x, logo_y, logo_x + logo_size, logo_y + logo_size),
+        radius=radius,
+        fill=blue,
+    )
+    draw.rounded_rectangle(
+        (logo_x + 36, logo_y + 48, logo_x + 90, logo_y + 102),
+        radius=12,
+        fill="white",
+    )
+    draw.polygon(
+        [
+            (logo_x + 90, logo_y + 58),
+            (logo_x + 116, logo_y + 45),
+            (logo_x + 116, logo_y + 105),
+            (logo_x + 90, logo_y + 92),
+        ],
+        fill="white",
+    )
+
+    font_candidates = [
+        "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+    ]
+    regular_candidates = [
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    ]
+
+    bold_font = None
+    regular_font = None
+    for path in font_candidates:
+        if Path(path).is_file():
+            bold_font = ImageFont.truetype(path, 50)
+            break
+    for path in regular_candidates:
+        if Path(path).is_file():
+            regular_font = ImageFont.truetype(path, 28)
+            break
+
+    if bold_font is None:
+        bold_font = ImageFont.load_default()
+    if regular_font is None:
+        regular_font = ImageFont.load_default()
+
+    title = "Zoom ready to join"
+    bbox = draw.textbbox((0, 0), title, font=bold_font)
+    title_w = bbox[2] - bbox[0]
+    title_x = (width - title_w) // 2
+    draw.text((title_x, 270), title, fill=dark, font=bold_font)
+
+    subtitle = "Microphone OFF  •  Camera OFF"
+    bbox = draw.textbbox((0, 0), subtitle, font=regular_font)
+    subtitle_w = bbox[2] - bbox[0]
+    draw.text(
+        ((width - subtitle_w) // 2, 350),
+        subtitle,
+        fill=(90, 90, 96),
+        font=regular_font,
+    )
+
+    image.save(ZOOM_READY_IMAGE, format="PNG", optimize=True)
+    return ZOOM_READY_IMAGE
+
+
 async def zoom_ready_panel(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -151,16 +233,32 @@ async def zoom_ready_panel(
     chat_id = update.effective_chat.id
     await _delete_old_panels(context, chat_id)
 
-    if not ZOOM_READY_IMAGE.is_file():
-        raise RuntimeError(
-            f"Zoom ready image is missing: {ZOOM_READY_IMAGE}"
-        )
+    try:
+        image_path = create_zoom_ready_image()
+        with image_path.open("rb") as image_file:
+            message = await context.bot.send_photo(
+                chat_id=chat_id,
+                photo=image_file,
+                caption=(
+                    "<b>Zoom ready to join</b>\n"
+                    "Name: <b>Erik</b>\n"
+                    "🎙️ Microphone: <b>OFF</b>\n"
+                    "📷 Camera: <b>OFF</b>"
+                ),
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Join", callback_data="zoom_join")]
+                ]),
+            )
 
-    with ZOOM_READY_IMAGE.open("rb") as image_file:
-        message = await context.bot.send_photo(
+        context.chat_data[PANEL_KEY] = message.message_id
+        context.chat_data[PANEL_HISTORY_KEY] = [message.message_id]
+        return
+    except Exception:
+        # Keep the Join control available even if Telegram rejects the image.
+        message = await context.bot.send_message(
             chat_id=chat_id,
-            photo=image_file,
-            caption=(
+            text=(
                 "<b>Zoom ready to join</b>\n"
                 "Name: <b>Erik</b>\n"
                 "🎙️ Microphone: <b>OFF</b>\n"
@@ -171,8 +269,8 @@ async def zoom_ready_panel(
                 [InlineKeyboardButton("Join", callback_data="zoom_join")]
             ]),
         )
-    context.chat_data[PANEL_KEY] = message.message_id
-    context.chat_data[PANEL_HISTORY_KEY] = [message.message_id]
+        context.chat_data[PANEL_KEY] = message.message_id
+        context.chat_data[PANEL_HISTORY_KEY] = [message.message_id]
 
 
 async def background_school(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
