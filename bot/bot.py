@@ -42,7 +42,6 @@ async def delete_message(message) -> None:
 
 def home_keyboard() -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton("🎓 School Mode", callback_data="school")],
-            [InlineKeyboardButton("🎥 Zoom", callback_data="zoom")],
             [InlineKeyboardButton("💬 Zoom Chat", callback_data="zoom_chat")],
             [InlineKeyboardButton("🌫 Browser", callback_data="browser")],
             [InlineKeyboardButton("🧩 Actions", callback_data="actions")],
