@@ -181,15 +181,51 @@ class BrowserManager:
 
     def _start_browser(self) -> None:
         import os
+        import shutil
 
         settings = load_settings()
-        executable = _browser_path(settings)
+
+        # Build a list instead of assuming the Playwright-downloaded Chromium
+        # exists. On Arch/CachyOS, a system Chromium package may be installed
+        # while Playwright's own cache is empty.
+        executables: list[tuple[str, str]] = []
+
+        try:
+            brave = _browser_path(settings)
+        except Exception:
+            brave = ""
+
+        if brave:
+            executables.append(("brave", brave))
+
+        system_browser_candidates = [
+            shutil.which("chromium"),
+            shutil.which("chromium-browser"),
+            shutil.which("google-chrome"),
+            shutil.which("google-chrome-stable"),
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser",
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable",
+        ]
+
+        seen: set[str] = set()
+        for candidate in system_browser_candidates:
+            if not candidate:
+                continue
+            path = str(Path(candidate).expanduser())
+            if path in seen:
+                continue
+            seen.add(path)
+            if not Path(path).is_file():
+                continue
+            if brave and path == brave:
+                continue
+            executables.append(("system-chromium", path))
 
         # Brave can exit immediately under a user systemd service when its
         # compositor/backend or sandbox startup path disagrees with the current
-        # Hyprland/XWayland session. Try a few isolated launch configurations,
-        # then fall back to Playwright's bundled Chromium rather than leaving
-        # LAUSD/Zoom completely unavailable.
+        # Hyprland/XWayland session. Try a few isolated launch configurations.
         base_args = [
             "--no-first-run",
             "--disable-session-crashed-bubble",
@@ -222,37 +258,39 @@ class BrowserManager:
 
         last_error: Exception | None = None
 
-        # First try the configured Brave executable.
-        for args in launch_variants:
-            browser = None
-            try:
-                browser = self._pw.chromium.launch(
-                    executable_path=executable,
-                    headless=False,
-                    args=args,
-                    env=env,
-                    timeout=30000,
-                )
-                context = browser.new_context()
-                self._browser = browser
-                self._context = context
-                self._browser_kind = "brave"
-                last_error = None
-                break
-            except Exception as exc:
-                last_error = exc
-                self._browser = None
-                self._context = None
-                if browser is not None:
-                    try:
-                        browser.close()
-                    except Exception:
-                        pass
+        # Try configured Brave first, then a system Chromium/Chrome binary.
+        for kind, executable in executables:
+            for args in launch_variants:
+                browser = None
+                try:
+                    browser = self._pw.chromium.launch(
+                        executable_path=executable,
+                        headless=False,
+                        args=args,
+                        env=env,
+                        timeout=30000,
+                    )
+                    context = browser.new_context()
+                    self._browser = browser
+                    self._context = context
+                    self._browser_kind = kind
+                    last_error = None
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    self._browser = None
+                    self._context = None
+                    if browser is not None:
+                        try:
+                            browser.close()
+                        except Exception:
+                            pass
 
-        # Emergency fallback: Playwright's own Chromium is version-matched to
-        # the installed Playwright package and is therefore safer than trying
-        # more arbitrary Brave flags when the branded executable exits during
-        # startup.
+            if self._context is not None:
+                break
+
+        # Final fallback: Playwright's own Chromium, when its browser binary
+        # has actually been installed in the cache.
         if self._context is None:
             fallback_args = [
                 "--no-first-run",
@@ -285,9 +323,15 @@ class BrowserManager:
                         pass
 
         if self._context is None:
+            if not executables and last_error is None:
+                detail = "Brave and system Chromium/Chrome were not found."
+            else:
+                detail = f"{type(last_error).__name__}: {last_error}"
             raise RuntimeError(
                 "No managed browser could be started. "
-                f"Brave/Chromium last error: {type(last_error).__name__}: {last_error}"
+                f"Last error: {detail}. "
+                "Install system Chromium (e.g. 'sudo pacman -S chromium') "
+                "or Playwright Chromium ('python -m playwright install chromium')."
             ) from last_error
 
         # Auto-allow media permissions for Zoom so Chromium does not show
