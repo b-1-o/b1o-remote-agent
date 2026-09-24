@@ -352,6 +352,10 @@ class BrowserManager:
             return (
                 "включить видео",
                 "включить мое видео",
+                "включить подачу",
+                "включить показ",
+                "включить передачу",
+                "включить виде",
                 "turn on my video",
                 "turn on video",
                 "start video",
@@ -376,6 +380,9 @@ class BrowserManager:
             return (
                 "выключить видео",
                 "выключить видео для всех",
+                "выключить подачу",
+                "выключить показ",
+                "выключить передачу",
                 "turn off my video",
                 "turn off video",
                 "stop video",
@@ -440,6 +447,55 @@ class BrowserManager:
                         return True
             except Exception:
                 continue
+
+        # Fallback for compact Russian Zoom pre-join controls where
+        # the camera label is truncated visually to something like
+        # "Включить по..." and the accessible text has no literal "видео".
+        try:
+            candidates = []
+            for index in range(min(count, 150)):
+                button = buttons.nth(index)
+                if not button.is_visible():
+                    continue
+                text = self._zoom_button_text(button)
+                normalized = " ".join(text.lower().split())
+                if not normalized:
+                    continue
+                if not (
+                    "включить" in normalized
+                    or "выключить" in normalized
+                    or "mute" in normalized
+                    or "unmute" in normalized
+                ):
+                    continue
+                box = button.bounding_box()
+                if not box:
+                    continue
+                candidates.append((box["y"], box["x"], button, normalized))
+
+            if media == "video" and len(candidates) >= 2:
+                candidates.sort(key=lambda item: (item[0], item[1]))
+                first_y = candidates[0][0]
+                row = [
+                    item for item in candidates
+                    if abs(item[0] - first_y) < 60
+                ]
+                row.sort(key=lambda item: item[1])
+
+                if len(row) >= 2:
+                    video_button = row[1][2]
+                    video_text = row[1][3]
+                    # In this compact pre-join row: audio is first, video is
+                    # second. "Включить..." means the video is already OFF.
+                    if "включить" in video_text:
+                        return True
+
+                    # If it's still in the ON state, report that it is not OFF
+                    # so the caller can click the second media button.
+                    if "выключить" in video_text:
+                        return False
+        except Exception:
+            pass
 
         return False
 
@@ -542,6 +598,52 @@ class BrowserManager:
                         return self._zoom_media_is_off(page, media)
             except Exception:
                 continue
+
+        # Positional fallback for the exact compact pre-join row in
+        # the preview: microphone first, camera second.
+        if media == "video":
+            try:
+                candidates = []
+                for index in range(min(buttons.count(), 150)):
+                    button = buttons.nth(index)
+                    if not button.is_visible():
+                        continue
+                    text = self._zoom_button_text(button)
+                    normalized = " ".join(text.lower().split())
+                    if not normalized:
+                        continue
+                    if not (
+                        "включить" in normalized
+                        or "выключить" in normalized
+                        or "mute" in normalized
+                        or "unmute" in normalized
+                    ):
+                        continue
+                    box = button.bounding_box()
+                    if not box:
+                        continue
+                    candidates.append((box["y"], box["x"], button, normalized))
+
+                if len(candidates) >= 2:
+                    candidates.sort(key=lambda item: (item[0], item[1]))
+                    row_y = candidates[0][0]
+                    row = [
+                        item for item in candidates
+                        if abs(item[0] - row_y) < 60
+                    ]
+                    row.sort(key=lambda item: item[1])
+
+                    if len(row) >= 2:
+                        video_button = row[1][2]
+                        video_text = row[1][3]
+                        if "выключить" in video_text:
+                            video_button.click(force=True, timeout=2500)
+                            page.wait_for_timeout(400)
+                            return self._zoom_media_is_off(page, media)
+                        if "включить" in video_text:
+                            return True
+            except Exception:
+                pass
 
         return self._zoom_media_is_off(page, media)
 
