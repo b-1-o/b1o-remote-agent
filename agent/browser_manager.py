@@ -1211,6 +1211,88 @@ class BrowserManager:
             else:
                 password_field.press("Enter")
 
+        def _finish_saml_handoff(page) -> None:
+            """Wait for the Microsoft -> LAUSD SAML POST to finish.
+
+            Microsoft can briefly remain on /saml2 while returning the SAML
+            assertion to the LAUSD service provider. Playwright normally
+            follows the auto-submit form, but explicitly submit it when the
+            response form is present and keep polling for the final LAUSD URL.
+            """
+            deadline = time.monotonic() + 20.0
+            submitted = False
+
+            while time.monotonic() < deadline:
+                current = (page.url or "").lower()
+
+                # Optional Microsoft "Stay signed in?" step.
+                stay_yes = self._first_visible([
+                    page.get_by_role("button", name=re.compile(r"^yes$", re.I)),
+                    page.get_by_text(re.compile(r"^yes$", re.I)),
+                ])
+                if stay_yes is not None:
+                    try:
+                        stay_yes.click(force=True, timeout=3000)
+                        page.wait_for_timeout(1200)
+                        continue
+                    except Exception:
+                        pass
+
+                # Some Entra SAML responses are delivered as a hidden form
+                # that JavaScript normally auto-submits.
+                saml_response = page.locator(
+                    'input[name="SAMLResponse"], textarea[name="SAMLResponse"]'
+                )
+                try:
+                    if saml_response.count() and not submitted:
+                        form = saml_response.first.locator("xpath=ancestor::form[1]")
+                        if form.count():
+                            form.evaluate("(form) => form.submit()")
+                            submitted = True
+                            page.wait_for_timeout(1500)
+                            continue
+                except Exception:
+                    pass
+
+                # Once we are outside the Microsoft auth host, the SAML handoff
+                # is complete enough for the caller to inspect the destination.
+                if (
+                    current
+                    and "login.microsoftonline.com" not in current
+                    and "login.live.com" not in current
+                    and "signon.lausd.net" not in current
+                ):
+                    return
+
+                # If an authentication error is rendered, stop early with the
+                # actual message instead of waiting for a generic timeout.
+                try:
+                    text = (page.locator("body").inner_text() or "").strip()
+                except Exception:
+                    text = ""
+
+                lowered = text.lower()
+                error_phrases = (
+                    "incorrect",
+                    "invalid",
+                    "can't sign you in",
+                    "cannot sign you in",
+                    "doesn't exist",
+                    "does not exist",
+                    "account or password",
+                )
+                if any(phrase in lowered for phrase in error_phrases):
+                    raise RuntimeError(
+                        "LAUSD/Microsoft sign-in error: "
+                        + " ".join(text.split())[:500]
+                    )
+
+                page.wait_for_timeout(800)
+
+            raise RuntimeError(
+                f"LAUSD SSO handoff timed out. URL={page.url}"
+            )
+
         def job() -> dict:
             page = self._new_page(slot)
             page.bring_to_front()
@@ -1295,19 +1377,7 @@ class BrowserManager:
 
             password_field.fill(password)
             _submit_sign_in(page, password_field)
-            page.wait_for_timeout(5000)
-
-            # Optional Microsoft/LAUSD "Stay signed in?" page.
-            stay_yes = self._first_visible([
-                page.get_by_role("button", name=re.compile(r"^yes$", re.I)),
-                page.get_by_text(re.compile(r"^yes$", re.I)),
-            ])
-            if stay_yes is not None:
-                try:
-                    stay_yes.click(force=True, timeout=5000)
-                    page.wait_for_timeout(3000)
-                except Exception:
-                    pass
+            _finish_saml_handoff(page)
 
             page.bring_to_front()
             final_url = page.url
