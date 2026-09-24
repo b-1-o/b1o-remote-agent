@@ -1221,13 +1221,16 @@ class BrowserManager:
             )
             page.wait_for_timeout(2200)
 
-            # lms.lausd.net currently redirects to LAUSD's Schoology picker.
-            # Select the Students card before looking for credentials.
-            current = (page.url or "").lower()
-            picker_text = (page.locator("body").inner_text() or "").lower()
-            if "select an option" in picker_text or "students" in picker_text:
-                _click_student_option(page)
-                page.wait_for_timeout(1800)
+            # lms.lausd.net currently redirects to LAUSD's Schoology
+            # role picker. Always give the Students control a chance to act;
+            # the redirect can replace the document while it is rendering.
+            _click_student_option(page)
+            page.wait_for_timeout(1800)
+
+            # A second pass handles redirects where the first document was
+            # replaced immediately after the click.
+            _click_student_option(page)
+            page.wait_for_timeout(1200)
 
             username_field = _visible_input(
                 page,
@@ -1320,7 +1323,6 @@ class BrowserManager:
                 or "login.live.com" in lowered
                 or "signon.lausd.net" in lowered
                 or "student/login" in lowered
-                or lowered.rstrip("/").endswith("/login")
                 or "select an option" in body_text
             )
             if still_login:
